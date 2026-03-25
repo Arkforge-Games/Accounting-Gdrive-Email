@@ -1,0 +1,20 @@
+// Reusable class name constants
+export const cx = {
+  card: "bg-white border border-gray-200 rounded-xl shadow-sm",
+  btn: "px-4 py-2 rounded-lg font-medium text-sm transition-all inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed",
+  btnPrimary: "px-4 py-2 rounded-lg font-medium text-sm transition-all inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800",
+  btnSecondary: "px-4 py-2 rounded-lg font-medium text-sm transition-all inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 active:bg-gray-100",
+  btnSuccess: "px-4 py-2 rounded-lg font-medium text-sm transition-all inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed bg-green-600 text-white hover:bg-green-700",
+  btnDanger: "px-4 py-2 rounded-lg font-medium text-sm transition-all inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed bg-red-600 text-white hover:bg-red-700",
+  input: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500",
+  badge: "px-2 py-0.5 rounded-full text-xs font-medium",
+  badgeGdrive: "px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700",
+  badgeEmail: "px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700",
+  badgeGmail: "px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700",
+  statCard: "bg-white border border-gray-200 rounded-xl shadow-sm p-5 flex flex-col gap-1",
+  tableHeader: "text-left p-3 text-xs font-semibold text-gray-500 uppercase tracking-wider",
+  tableCell: "p-3 text-sm",
+  sidebarLink: "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
+  sidebarLinkActive: "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors bg-blue-50 text-blue-700",
+  sidebarLinkHover: "hover:bg-gray-100",
+};
