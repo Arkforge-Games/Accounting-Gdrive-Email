@@ -79,7 +79,7 @@ export default function DashboardOverview() {
               <IconGoogle className="w-4 h-4" /> Sync Google Drive
             </button>
             <button
-              onClick={() => fetch("/api/sync?source=outlook", { method: "POST" }).then(() => window.location.reload())}
+              onClick={() => fetch("/api/sync?source=email", { method: "POST" }).then(() => window.location.reload())}
               className={cx.btnSecondary}
             >
               <IconMicrosoft className="w-4 h-4" /> Sync Email

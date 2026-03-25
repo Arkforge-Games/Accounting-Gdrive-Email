@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { store } from "@/lib/store";
 import { getTokens, getAuthenticatedClient } from "@/lib/google";
-import { getAccessToken } from "@/lib/microsoft";
+import { fetchEmailAttachments } from "@/lib/imap";
 import { google } from "googleapis";
-import { Client } from "@microsoft/microsoft-graph-client";
 import type { SyncFile, SyncResult } from "@/lib/types";
 
 function formatBytes(bytes: number): string {
@@ -61,58 +60,19 @@ async function syncGDrive(): Promise<SyncResult> {
   return result;
 }
 
-async function syncOutlook(): Promise<SyncResult> {
-  const result: SyncResult = { source: "outlook", filesAdded: 0, filesUpdated: 0, errors: [], timestamp: new Date().toISOString() };
+async function syncEmail(): Promise<SyncResult> {
+  const result: SyncResult = { source: "email", filesAdded: 0, filesUpdated: 0, errors: [], timestamp: new Date().toISOString() };
 
   try {
-    const token = getAccessToken();
-    if (!token) {
-      result.errors.push("Not authenticated with Microsoft");
-      return result;
-    }
-
-    const client = Client.init({
-      authProvider: (done) => done(null, token),
-    });
-
-    const messages = await client
-      .api("/me/messages")
-      .filter("hasAttachments eq true")
-      .top(100)
-      .orderby("receivedDateTime desc")
-      .select("id,subject,receivedDateTime,from")
-      .get();
-
-    const files: SyncFile[] = [];
-
-    for (const msg of messages.value || []) {
-      const attachments = await client
-        .api(`/me/messages/${msg.id}/attachments`)
-        .get();
-
-      for (const att of attachments.value || []) {
-        if (att["@odata.type"] === "#microsoft.graph.fileAttachment") {
-          files.push({
-            id: `outlook_${msg.id}_${att.id}`,
-            name: att.name,
-            mimeType: att.contentType || "application/octet-stream",
-            source: "email-outlook",
-            date: msg.receivedDateTime || new Date().toISOString(),
-            size: att.size ? formatBytes(att.size) : undefined,
-            sizeBytes: att.size || undefined,
-            emailSubject: msg.subject,
-            emailFrom: msg.from?.emailAddress?.address,
-          });
-        }
-      }
-    }
+    const files = await fetchEmailAttachments();
 
     const { added, updated } = store.upsertFiles(files);
     result.filesAdded = added;
     result.filesUpdated = updated;
 
-    store.setConnection("outlook", {
+    store.setConnection("gmail", {
       connected: true,
+      email: process.env.IMAP_USER,
       lastSync: result.timestamp,
       fileCount: files.length,
     });
@@ -130,8 +90,8 @@ export async function POST(req: NextRequest) {
   if (!source || source === "gdrive") {
     results.push(await syncGDrive());
   }
-  if (!source || source === "outlook") {
-    results.push(await syncOutlook());
+  if (!source || source === "email") {
+    results.push(await syncEmail());
   }
 
   // Log activity
