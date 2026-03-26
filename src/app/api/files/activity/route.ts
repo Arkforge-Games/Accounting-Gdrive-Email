@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { store } from "@/lib/store";
+import * as db from "@/lib/db";
 
 export async function GET() {
-  return NextResponse.json({ activity: store.getActivity() });
+  return NextResponse.json({ activity: db.getActivity() });
 }

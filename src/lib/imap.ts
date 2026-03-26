@@ -10,7 +10,11 @@ function formatBytes(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
 }
 
-export async function fetchEmailAttachments(): Promise<SyncFile[]> {
+export interface EmailFile extends SyncFile {
+  content?: Buffer;
+}
+
+export async function fetchEmailAttachments(): Promise<EmailFile[]> {
   const host = process.env.IMAP_HOST || "imap.gmail.com";
   const port = Number(process.env.IMAP_PORT || "993");
   const user = process.env.IMAP_USER || "";
@@ -28,14 +32,13 @@ export async function fetchEmailAttachments(): Promise<SyncFile[]> {
     logger: false,
   });
 
-  const files: SyncFile[] = [];
+  const files: EmailFile[] = [];
 
   try {
     await client.connect();
 
     const lock = await client.getMailboxLock("INBOX");
     try {
-      // Fetch last 100 messages that have attachments
       const mailbox = client.mailbox;
       const totalMessages = mailbox ? Number(mailbox.exists) || 100 : 100;
       const messages = client.fetch(
@@ -77,6 +80,7 @@ export async function fetchEmailAttachments(): Promise<SyncFile[]> {
             sizeBytes: att.size || undefined,
             emailSubject: subject,
             emailFrom: fromAddr,
+            content: Buffer.from(att.content),
           });
         }
       }

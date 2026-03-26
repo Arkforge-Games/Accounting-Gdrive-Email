@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { store } from "@/lib/store";
+import * as db from "@/lib/db";
 
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const file = store.getFile(id);
+  const file = db.getFile(id);
   if (!file) {
     return NextResponse.json({ error: "File not found" }, { status: 404 });
   }
@@ -18,10 +18,10 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const deleted = store.deleteFile(id);
+  const deleted = db.deleteFile(id);
   if (!deleted) {
     return NextResponse.json({ error: "File not found" }, { status: 404 });
   }
-  store.addActivity({ action: "delete", source: "manual", details: `Deleted file` });
+  db.addActivity({ action: "delete", source: "manual", details: "Deleted file" });
   return NextResponse.json({ success: true });
 }

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { store } from "@/lib/store";
+import * as db from "@/lib/db";
 
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get("q") || "";
@@ -7,6 +7,6 @@ export async function GET(req: NextRequest) {
   const dateFrom = req.nextUrl.searchParams.get("dateFrom") || undefined;
   const dateTo = req.nextUrl.searchParams.get("dateTo") || undefined;
 
-  const files = store.searchFiles(q, { source, dateFrom, dateTo });
+  const files = db.searchFiles(q, { source, dateFrom, dateTo });
   return NextResponse.json({ files });
 }

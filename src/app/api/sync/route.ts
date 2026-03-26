@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { store } from "@/lib/store";
+import * as db from "@/lib/db";
 import { getTokens, getAuthenticatedClient } from "@/lib/google";
 import { fetchEmailAttachments } from "@/lib/imap";
 import { google } from "googleapis";
@@ -44,11 +44,11 @@ async function syncGDrive(): Promise<SyncResult> {
       previewUrl: f.thumbnailLink || undefined,
     }));
 
-    const { added, updated } = store.upsertFiles(files);
+    const { added, updated } = db.upsertFiles(files);
     result.filesAdded = added;
     result.filesUpdated = updated;
 
-    store.setConnection("gdrive", {
+    db.setConnection("gdrive", {
       connected: true,
       lastSync: result.timestamp,
       fileCount: files.length,
@@ -66,11 +66,11 @@ async function syncEmail(): Promise<SyncResult> {
   try {
     const files = await fetchEmailAttachments();
 
-    const { added, updated } = store.upsertFiles(files);
+    const { added, updated } = db.upsertFiles(files);
     result.filesAdded = added;
     result.filesUpdated = updated;
 
-    store.setConnection("gmail", {
+    db.setConnection("gmail", {
       connected: true,
       email: process.env.IMAP_USER,
       lastSync: result.timestamp,
@@ -94,9 +94,8 @@ export async function POST(req: NextRequest) {
     results.push(await syncEmail());
   }
 
-  // Log activity
   for (const r of results) {
-    store.addActivity({
+    db.addActivity({
       action: "sync",
       source: r.source,
       details: r.errors.length > 0
