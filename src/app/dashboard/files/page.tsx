@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { TopBar } from "@/components/TopBar";
 import { FileTable } from "@/components/FileTable";
 import { cx } from "@/lib/cn";
-import { IconFilter } from "@/components/icons";
+import { IconFilter, IconDownload } from "@/components/icons";
 import type { SyncFile } from "@/lib/types";
 
 export default function FilesPage() {
@@ -39,13 +39,19 @@ export default function FilesPage() {
       <div className="p-6 space-y-4">
         {/* Filters */}
         <div className="flex items-center justify-between">
-          <button
-            onClick={() => setShowFilters(!showFilters)}
-            className={`${cx.btnSecondary} ${showFilters ? "bg-gray-100" : ""}`}
-          >
-            <IconFilter className="w-4 h-4" />
-            Filters
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowFilters(!showFilters)}
+              className={`${cx.btnSecondary} ${showFilters ? "bg-gray-100" : ""}`}
+            >
+              <IconFilter className="w-4 h-4" />
+              Filters
+            </button>
+            <a href="/api/files/download-all" className={cx.btnPrimary}>
+              <IconDownload className="w-4 h-4" />
+              Download All
+            </a>
+          </div>
           <div className="text-sm text-gray-400">
             {filtered.length} of {files.length} files
           </div>
