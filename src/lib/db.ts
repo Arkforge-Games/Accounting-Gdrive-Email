@@ -23,8 +23,31 @@ function getDb(): Database.Database {
 
 function initSchema(db: Database.Database) {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS emails (
+      id TEXT PRIMARY KEY,
+      uid INTEGER,
+      message_id TEXT,
+      subject TEXT,
+      from_address TEXT,
+      from_name TEXT,
+      to_addresses TEXT,
+      cc_addresses TEXT,
+      bcc_addresses TEXT,
+      reply_to TEXT,
+      date TEXT NOT NULL,
+      body_text TEXT,
+      body_html TEXT,
+      headers TEXT,
+      labels TEXT,
+      has_attachments INTEGER DEFAULT 0,
+      attachment_count INTEGER DEFAULT 0,
+      raw_source BLOB,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS files (
       id TEXT PRIMARY KEY,
+      email_id TEXT REFERENCES emails(id),
       name TEXT NOT NULL,
       mime_type TEXT NOT NULL,
       source TEXT NOT NULL,
@@ -61,10 +84,14 @@ function initSchema(db: Database.Database) {
       file_count INTEGER DEFAULT 0
     );
 
+    CREATE INDEX IF NOT EXISTS idx_emails_date ON emails(date);
+    CREATE INDEX IF NOT EXISTS idx_emails_from ON emails(from_address);
+    CREATE INDEX IF NOT EXISTS idx_emails_subject ON emails(subject);
     CREATE INDEX IF NOT EXISTS idx_files_source ON files(source);
     CREATE INDEX IF NOT EXISTS idx_files_date ON files(date);
     CREATE INDEX IF NOT EXISTS idx_files_starred ON files(starred);
     CREATE INDEX IF NOT EXISTS idx_files_name ON files(name);
+    CREATE INDEX IF NOT EXISTS idx_files_email_id ON files(email_id);
     CREATE INDEX IF NOT EXISTS idx_activity_timestamp ON activity(timestamp);
   `);
 
@@ -76,6 +103,93 @@ function initSchema(db: Database.Database) {
     insert.run("outlook");
     insert.run("gmail");
   }
+}
+
+// ===== Emails =====
+
+export interface EmailRecord {
+  id: string;
+  uid?: number;
+  messageId?: string;
+  subject: string;
+  fromAddress: string;
+  fromName?: string;
+  toAddresses: string;
+  ccAddresses?: string;
+  bccAddresses?: string;
+  replyTo?: string;
+  date: string;
+  bodyText?: string;
+  bodyHtml?: string;
+  headers?: string;
+  labels?: string;
+  hasAttachments: boolean;
+  attachmentCount: number;
+  rawSource?: Buffer;
+}
+
+export function upsertEmail(email: EmailRecord) {
+  getDb().prepare(`
+    INSERT INTO emails (id, uid, message_id, subject, from_address, from_name, to_addresses, cc_addresses, bcc_addresses, reply_to, date, body_text, body_html, headers, labels, has_attachments, attachment_count, raw_source)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      subject = excluded.subject,
+      from_address = excluded.from_address,
+      from_name = excluded.from_name,
+      to_addresses = excluded.to_addresses,
+      cc_addresses = excluded.cc_addresses,
+      bcc_addresses = excluded.bcc_addresses,
+      reply_to = excluded.reply_to,
+      body_text = excluded.body_text,
+      body_html = excluded.body_html,
+      headers = excluded.headers,
+      labels = excluded.labels,
+      has_attachments = excluded.has_attachments,
+      attachment_count = excluded.attachment_count,
+      raw_source = CASE WHEN excluded.raw_source IS NOT NULL THEN excluded.raw_source ELSE emails.raw_source END
+  `).run(
+    email.id,
+    email.uid || null,
+    email.messageId || null,
+    email.subject,
+    email.fromAddress,
+    email.fromName || null,
+    email.toAddresses,
+    email.ccAddresses || null,
+    email.bccAddresses || null,
+    email.replyTo || null,
+    email.date,
+    email.bodyText || null,
+    email.bodyHtml || null,
+    email.headers || null,
+    email.labels || null,
+    email.hasAttachments ? 1 : 0,
+    email.attachmentCount,
+    email.rawSource || null
+  );
+}
+
+export function getEmails(limit = 100): DbEmail[] {
+  return getDb()
+    .prepare("SELECT id, uid, message_id, subject, from_address, from_name, to_addresses, cc_addresses, bcc_addresses, reply_to, date, body_text, body_html, has_attachments, attachment_count, created_at FROM emails ORDER BY date DESC LIMIT ?")
+    .all(limit) as DbEmail[];
+}
+
+export function getEmail(id: string): DbEmail | undefined {
+  return getDb()
+    .prepare("SELECT * FROM emails WHERE id = ?")
+    .get(id) as DbEmail | undefined;
+}
+
+export function getEmailCount(): number {
+  return (getDb().prepare("SELECT COUNT(*) as c FROM emails").get() as { c: number }).c;
+}
+
+export function searchEmails(query: string): DbEmail[] {
+  const q = `%${query}%`;
+  return getDb()
+    .prepare("SELECT id, uid, message_id, subject, from_address, from_name, to_addresses, cc_addresses, date, body_text, has_attachments, attachment_count, created_at FROM emails WHERE subject LIKE ? OR from_address LIKE ? OR to_addresses LIKE ? OR body_text LIKE ? ORDER BY date DESC LIMIT 100")
+    .all(q, q, q, q) as DbEmail[];
 }
 
 // ===== Files =====
@@ -102,16 +216,17 @@ export function getFileContent(id: string): { content: Buffer; name: string; mim
   return { content: row.content, name: row.name, mimeType: row.mime_type };
 }
 
-export function upsertFiles(files: (SyncFile & { content?: Buffer })[]): { added: number; updated: number } {
+export function upsertFiles(files: (SyncFile & { content?: Buffer; emailId?: string })[]): { added: number; updated: number } {
   const d = getDb();
   let added = 0;
   let updated = 0;
 
   const upsert = d.prepare(`
-    INSERT INTO files (id, name, mime_type, source, date, size, size_bytes, download_url, preview_url, folder, email_subject, email_from, tags, has_content, content, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    INSERT INTO files (id, email_id, name, mime_type, source, date, size, size_bytes, download_url, preview_url, folder, email_subject, email_from, tags, has_content, content, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
+      email_id = excluded.email_id,
       mime_type = excluded.mime_type,
       date = excluded.date,
       size = excluded.size,
@@ -136,6 +251,7 @@ export function upsertFiles(files: (SyncFile & { content?: Buffer })[]): { added
 
       upsert.run(
         f.id,
+        (f as { emailId?: string }).emailId || null,
         f.name,
         f.mimeType,
         f.source,
@@ -283,6 +399,28 @@ export function getStats() {
 }
 
 // ===== Helpers =====
+
+export interface DbEmail {
+  id: string;
+  uid: number | null;
+  message_id: string | null;
+  subject: string;
+  from_address: string;
+  from_name: string | null;
+  to_addresses: string;
+  cc_addresses: string | null;
+  bcc_addresses: string | null;
+  reply_to: string | null;
+  date: string;
+  body_text: string | null;
+  body_html: string | null;
+  headers: string | null;
+  labels: string | null;
+  has_attachments: number;
+  attachment_count: number;
+  raw_source: Buffer | null;
+  created_at: string;
+}
 
 interface DbFile {
   id: string;

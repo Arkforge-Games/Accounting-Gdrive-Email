@@ -11,11 +11,13 @@ import {
   IconActivity,
   IconSettings,
   IconSync,
+  IconMail,
 } from "./icons";
 
 const links = [
   { href: "/dashboard", label: "Overview", icon: IconDashboard },
-  { href: "/dashboard/files", label: "All Files", icon: IconFiles },
+  { href: "/dashboard/emails", label: "Emails", icon: IconMail },
+  { href: "/dashboard/files", label: "Attachments", icon: IconFiles },
   { href: "/dashboard/starred", label: "Starred", icon: IconStar },
   { href: "/dashboard/search", label: "Search", icon: IconSearch },
   { href: "/dashboard/activity", label: "Activity", icon: IconActivity },

@@ -64,7 +64,7 @@ async function syncEmail(): Promise<SyncResult> {
   const result: SyncResult = { source: "email", filesAdded: 0, filesUpdated: 0, errors: [], timestamp: new Date().toISOString() };
 
   try {
-    const files = await fetchEmailAttachments();
+    const { files, emailCount } = await fetchEmailAttachments();
 
     const { added, updated } = db.upsertFiles(files);
     result.filesAdded = added;
@@ -74,7 +74,7 @@ async function syncEmail(): Promise<SyncResult> {
       connected: true,
       email: process.env.IMAP_USER,
       lastSync: result.timestamp,
-      fileCount: files.length,
+      fileCount: emailCount,
     });
   } catch (err) {
     result.errors.push(err instanceof Error ? err.message : "Unknown error");
