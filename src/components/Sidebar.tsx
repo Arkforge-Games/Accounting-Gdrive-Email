@@ -12,12 +12,14 @@ import {
   IconSettings,
   IconSync,
   IconMail,
+  IconDrive,
 } from "./icons";
 
 const links = [
   { href: "/dashboard", label: "Overview", icon: IconDashboard },
   { href: "/dashboard/emails", label: "Emails", icon: IconMail },
   { href: "/dashboard/files", label: "Attachments", icon: IconFiles },
+  { href: "/dashboard/drive", label: "Google Drive", icon: IconDrive },
   { href: "/dashboard/starred", label: "Starred", icon: IconStar },
   { href: "/dashboard/search", label: "Search", icon: IconSearch },
   { href: "/dashboard/activity", label: "Activity", icon: IconActivity },
