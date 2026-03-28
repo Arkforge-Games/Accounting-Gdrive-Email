@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { TopBar } from "@/components/TopBar";
 import { ConnectionCard } from "@/components/ConnectionCard";
 import { cx } from "@/lib/cn";
@@ -13,13 +13,45 @@ export default function SettingsPage() {
     outlook: { connected: false },
     gmail: { connected: false },
   });
+  const [settings, setSettings] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     fetch("/api/files/connections")
       .then((r) => r.json())
       .then(setConnections)
       .catch(console.error);
+
+    fetch("/api/settings")
+      .then((r) => r.json())
+      .then(setSettings)
+      .catch(console.error);
   }, []);
+
+  const updateSetting = useCallback((key: string, value: string) => {
+    setSettings((prev) => ({ ...prev, [key]: value }));
+    setSaved(false);
+  }, []);
+
+  const saveSettings = useCallback(async () => {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settings),
+      });
+      if (res.ok) {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 3000);
+      }
+    } catch (err) {
+      console.error("Failed to save settings:", err);
+    } finally {
+      setSaving(false);
+    }
+  }, [settings]);
 
   return (
     <>
@@ -77,7 +109,11 @@ export default function SettingsPage() {
                 <div className="font-medium text-sm">Auto-sync interval</div>
                 <div className="text-xs text-gray-400">How often to automatically check for new files</div>
               </div>
-              <select className={`${cx.input} w-40`}>
+              <select
+                className={`${cx.input} w-40`}
+                value={settings.sync_interval || "manual"}
+                onChange={(e) => updateSetting("sync_interval", e.target.value)}
+              >
                 <option value="manual">Manual only</option>
                 <option value="15">Every 15 min</option>
                 <option value="30">Every 30 min</option>
@@ -86,33 +122,55 @@ export default function SettingsPage() {
                 <option value="1440">Daily</option>
               </select>
             </div>
-            <div className="p-5 flex items-center justify-between">
-              <div>
+            <div className="p-5 flex items-center justify-between gap-4">
+              <div className="shrink-0">
                 <div className="font-medium text-sm">Google Drive folder</div>
-                <div className="text-xs text-gray-400">Specific folder to sync (leave blank for all)</div>
+                <div className="text-xs text-gray-400">Paste a Google Drive folder link or ID (leave blank for all files)</div>
               </div>
-              <input type="text" placeholder="e.g., Accounting/2024" className={`${cx.input} w-60`} />
+              <input
+                type="text"
+                placeholder="e.g., https://drive.google.com/drive/folders/abc123..."
+                className={`${cx.input} w-80`}
+                value={settings.gdrive_folder || ""}
+                onChange={(e) => updateSetting("gdrive_folder", e.target.value)}
+              />
             </div>
             <div className="p-5 flex items-center justify-between">
               <div>
                 <div className="font-medium text-sm">Email filter</div>
                 <div className="text-xs text-gray-400">Only sync attachments from emails matching this filter</div>
               </div>
-              <input type="text" placeholder="e.g., invoice OR receipt" className={`${cx.input} w-60`} />
+              <input
+                type="text"
+                placeholder="e.g., invoice OR receipt"
+                className={`${cx.input} w-60`}
+                value={settings.email_filter || ""}
+                onChange={(e) => updateSetting("email_filter", e.target.value)}
+              />
             </div>
             <div className="p-5 flex items-center justify-between">
               <div>
                 <div className="font-medium text-sm">File types</div>
                 <div className="text-xs text-gray-400">Only sync these file types</div>
               </div>
-              <input type="text" placeholder="e.g., pdf,xlsx,csv,jpg" className={`${cx.input} w-60`} />
+              <input
+                type="text"
+                placeholder="e.g., pdf,xlsx,csv,jpg"
+                className={`${cx.input} w-60`}
+                value={settings.file_types || ""}
+                onChange={(e) => updateSetting("file_types", e.target.value)}
+              />
             </div>
             <div className="p-5 flex items-center justify-between">
               <div>
                 <div className="font-medium text-sm">Max file size</div>
                 <div className="text-xs text-gray-400">Skip files larger than this</div>
               </div>
-              <select className={`${cx.input} w-40`}>
+              <select
+                className={`${cx.input} w-40`}
+                value={settings.max_file_size || "0"}
+                onChange={(e) => updateSetting("max_file_size", e.target.value)}
+              >
                 <option value="0">No limit</option>
                 <option value="5">5 MB</option>
                 <option value="10">10 MB</option>
@@ -120,6 +178,16 @@ export default function SettingsPage() {
                 <option value="50">50 MB</option>
                 <option value="100">100 MB</option>
               </select>
+            </div>
+            <div className="p-5 flex items-center justify-end gap-3">
+              {saved && <span className="text-xs text-green-400">Settings saved!</span>}
+              <button
+                className={cx.btnPrimary}
+                onClick={saveSettings}
+                disabled={saving}
+              >
+                {saving ? "Saving..." : "Save Settings"}
+              </button>
             </div>
           </div>
         </section>

@@ -15,7 +15,7 @@ export default function Home() {
           <Link href="/login" className="text-sm text-gray-600 hover:text-gray-900">
             Sign In
           </Link>
-          <Link href="/dashboard" className="px-4 py-2 rounded-lg font-medium text-sm bg-blue-600 text-white hover:bg-blue-700 inline-flex items-center gap-2">
+          <Link href="/login" className="px-4 py-2 rounded-lg font-medium text-sm bg-blue-600 text-white hover:bg-blue-700 inline-flex items-center gap-2">
             Get Started
           </Link>
         </div>
@@ -41,10 +41,10 @@ export default function Home() {
         </p>
 
         <div className="flex items-center justify-center gap-4 mb-16">
-          <Link href="/dashboard" className="px-6 py-3 rounded-lg font-medium text-base bg-blue-600 text-white hover:bg-blue-700 inline-flex items-center gap-2">
+          <Link href="/login" className="px-6 py-3 rounded-lg font-medium text-base bg-blue-600 text-white hover:bg-blue-700 inline-flex items-center gap-2">
             Open Dashboard
           </Link>
-          <Link href="/dashboard/settings" className="px-6 py-3 rounded-lg font-medium text-base bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 inline-flex items-center gap-2">
+          <Link href="/login" className="px-6 py-3 rounded-lg font-medium text-base bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 inline-flex items-center gap-2">
             Setup Guide
           </Link>
         </div>

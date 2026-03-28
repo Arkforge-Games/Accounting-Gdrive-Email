@@ -93,6 +93,18 @@ function initSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_files_name ON files(name);
     CREATE INDEX IF NOT EXISTS idx_files_email_id ON files(email_id);
     CREATE INDEX IF NOT EXISTS idx_activity_timestamp ON activity(timestamp);
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS google_tokens (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      tokens TEXT NOT NULL,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
   `);
 
   // Seed connections if empty
@@ -466,6 +478,46 @@ function rowToFile(row: DbFile): SyncFile {
     tags: row.tags ? JSON.parse(row.tags) : undefined,
   };
 }
+
+// ===== Settings =====
+
+export function getSetting(key: string): string | null {
+  const row = getDb().prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
+  return row?.value || null;
+}
+
+export function setSetting(key: string, value: string) {
+  getDb().prepare(
+    "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')"
+  ).run(key, value);
+}
+
+export function getAllSettings(): Record<string, string> {
+  const rows = getDb().prepare("SELECT key, value FROM settings").all() as { key: string; value: string }[];
+  const result: Record<string, string> = {};
+  for (const row of rows) result[row.key] = row.value;
+  return result;
+}
+
+// ===== Google Tokens (persistent) =====
+
+export function saveGoogleTokens(tokens: Record<string, unknown>) {
+  getDb().prepare(
+    "INSERT INTO google_tokens (id, tokens, updated_at) VALUES (1, ?, datetime('now')) ON CONFLICT(id) DO UPDATE SET tokens = excluded.tokens, updated_at = datetime('now')"
+  ).run(JSON.stringify(tokens));
+}
+
+export function loadGoogleTokens(): Record<string, unknown> | null {
+  const row = getDb().prepare("SELECT tokens FROM google_tokens WHERE id = 1").get() as { tokens: string } | undefined;
+  if (!row) return null;
+  try { return JSON.parse(row.tokens); } catch { return null; }
+}
+
+export function clearGoogleTokens() {
+  getDb().prepare("DELETE FROM google_tokens WHERE id = 1").run();
+}
+
+// ===== Helpers =====
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";

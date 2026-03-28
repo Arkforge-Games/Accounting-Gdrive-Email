@@ -1,4 +1,5 @@
 import { google } from "googleapis";
+import { saveGoogleTokens, loadGoogleTokens, clearGoogleTokens } from "./db";
 
 export function getOAuth2Client() {
   return new google.auth.OAuth2(
@@ -20,21 +21,41 @@ export function getAuthUrl() {
   });
 }
 
-// In-memory token store (replace with DB in production)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let tokens: Record<string, any> | null = null;
-
-export function setTokens(t: typeof tokens) {
-  tokens = t;
+export function setTokens(t: Record<string, any> | null) {
+  if (t) {
+    saveGoogleTokens(t);
+  } else {
+    clearGoogleTokens();
+  }
 }
 
-export function getTokens() {
-  return tokens;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function getTokens(): Record<string, any> | null {
+  return loadGoogleTokens();
 }
 
 export function getAuthenticatedClient() {
   const client = getOAuth2Client();
+  const tokens = getTokens();
   if (!tokens) throw new Error("Not authenticated with Google");
   client.setCredentials(tokens);
   return client;
+}
+
+/**
+ * Extract a Google Drive folder ID from a URL or raw ID.
+ * Supports:
+ *   - https://drive.google.com/drive/folders/FOLDER_ID
+ *   - https://drive.google.com/drive/u/0/folders/FOLDER_ID
+ *   - Raw folder ID string
+ */
+export function extractFolderId(input: string): string {
+  const trimmed = input.trim();
+  // Match folder ID from URL
+  const match = trimmed.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+  if (match) return match[1];
+  // If it looks like a raw ID (no slashes, no spaces)
+  if (/^[a-zA-Z0-9_-]+$/.test(trimmed)) return trimmed;
+  return trimmed;
 }

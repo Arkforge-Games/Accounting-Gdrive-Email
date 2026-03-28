@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as db from "@/lib/db";
-import { getTokens, getAuthenticatedClient } from "@/lib/google";
+import { getTokens, getAuthenticatedClient, extractFolderId } from "@/lib/google";
 import { fetchEmailAttachments } from "@/lib/imap";
 import { google } from "googleapis";
 import type { SyncFile, SyncResult } from "@/lib/types";
+import { Readable } from "stream";
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -13,45 +14,168 @@ function formatBytes(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
 }
 
+// Google Workspace MIME type export mappings
+const EXPORT_MIMES: Record<string, { mime: string; ext: string }> = {
+  "application/vnd.google-apps.document": { mime: "application/pdf", ext: ".pdf" },
+  "application/vnd.google-apps.spreadsheet": { mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ext: ".xlsx" },
+  "application/vnd.google-apps.presentation": { mime: "application/vnd.openxmlformats-officedocument.presentationml.presentation", ext: ".pptx" },
+  "application/vnd.google-apps.drawing": { mime: "application/pdf", ext: ".pdf" },
+};
+
+// Mime types to skip (not downloadable)
+const SKIP_MIMES = new Set([
+  "application/vnd.google-apps.folder",
+  "application/vnd.google-apps.shortcut",
+  "application/vnd.google-apps.form",
+  "application/vnd.google-apps.map",
+  "application/vnd.google-apps.site",
+]);
+
+async function streamToBuffer(stream: Readable): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
+async function downloadGDriveFile(
+  drive: ReturnType<typeof google.drive>,
+  fileId: string,
+  mimeType: string
+): Promise<{ content: Buffer; finalMime: string } | null> {
+  try {
+    const exportInfo = EXPORT_MIMES[mimeType];
+    if (exportInfo) {
+      // Google Workspace file — export to a real format
+      const res = await drive.files.export(
+        { fileId, mimeType: exportInfo.mime },
+        { responseType: "stream" }
+      );
+      const content = await streamToBuffer(res.data as unknown as Readable);
+      return { content, finalMime: exportInfo.mime };
+    } else {
+      // Regular file — direct download
+      const res = await drive.files.get(
+        { fileId, alt: "media" },
+        { responseType: "stream" }
+      );
+      const content = await streamToBuffer(res.data as unknown as Readable);
+      return { content, finalMime: mimeType };
+    }
+  } catch (err) {
+    console.error(`Failed to download file ${fileId}:`, err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+async function listAllFiles(
+  drive: ReturnType<typeof google.drive>,
+  folderId?: string
+): Promise<{ id: string; name: string; mimeType: string; modifiedTime: string; size: string | null; parents: string[] }[]> {
+  const allFiles: { id: string; name: string; mimeType: string; modifiedTime: string; size: string | null; parents: string[] }[] = [];
+  let pageToken: string | undefined;
+
+  const query = folderId ? `'${folderId}' in parents and trashed = false` : "trashed = false";
+
+  do {
+    const res = await drive.files.list({
+      pageSize: 100,
+      fields: "nextPageToken, files(id, name, mimeType, modifiedTime, size, parents)",
+      orderBy: "modifiedTime desc",
+      q: query,
+      ...(pageToken ? { pageToken } : {}),
+    });
+
+    const files = res.data.files || [];
+    for (const f of files) {
+      allFiles.push({
+        id: f.id!,
+        name: f.name || "Untitled",
+        mimeType: f.mimeType || "application/octet-stream",
+        modifiedTime: f.modifiedTime || new Date().toISOString(),
+        size: f.size || null,
+        parents: (f.parents as string[]) || [],
+      });
+    }
+
+    pageToken = res.data.nextPageToken || undefined;
+  } while (pageToken);
+
+  // If syncing a folder, also recurse into subfolders
+  if (folderId) {
+    const subfolders = allFiles.filter((f) => f.mimeType === "application/vnd.google-apps.folder");
+    for (const sub of subfolders) {
+      const subFiles = await listAllFiles(drive, sub.id);
+      allFiles.push(...subFiles);
+    }
+  }
+
+  return allFiles;
+}
+
 async function syncGDrive(): Promise<SyncResult> {
   const result: SyncResult = { source: "gdrive", filesAdded: 0, filesUpdated: 0, errors: [], timestamp: new Date().toISOString() };
 
   try {
     const tokens = getTokens();
     if (!tokens) {
-      result.errors.push("Not authenticated with Google");
+      result.errors.push("Not authenticated with Google. Go to Settings → Connect Google Drive.");
       return result;
     }
 
     const auth = getAuthenticatedClient();
     const drive = google.drive({ version: "v3", auth });
 
-    const res = await drive.files.list({
-      pageSize: 200,
-      fields: "files(id, name, mimeType, modifiedTime, size, webContentLink, parents, thumbnailLink)",
-      orderBy: "modifiedTime desc",
-    });
+    // Check if a specific folder is configured
+    const folderSetting = db.getSetting("gdrive_folder");
+    const folderId = folderSetting ? extractFolderId(folderSetting) : undefined;
 
-    const files: SyncFile[] = (res.data.files || []).map((f) => ({
-      id: `gdrive_${f.id}`,
-      name: f.name || "Untitled",
-      mimeType: f.mimeType || "application/octet-stream",
-      source: "gdrive" as const,
-      date: f.modifiedTime || new Date().toISOString(),
-      size: f.size ? formatBytes(Number(f.size)) : undefined,
-      sizeBytes: f.size ? Number(f.size) : undefined,
-      downloadUrl: f.webContentLink || undefined,
-      previewUrl: f.thumbnailLink || undefined,
-    }));
+    // List all files (with pagination + subfolder recursion)
+    const driveFiles = await listAllFiles(drive, folderId);
 
-    const { added, updated } = db.upsertFiles(files);
+    // Filter out non-downloadable types
+    const downloadable = driveFiles.filter((f) => !SKIP_MIMES.has(f.mimeType));
+
+    const syncFiles: (SyncFile & { content?: Buffer })[] = [];
+    let downloadErrors = 0;
+
+    for (const f of downloadable) {
+      const exportInfo = EXPORT_MIMES[f.mimeType];
+      const fileName = exportInfo ? `${f.name}${exportInfo.ext}` : f.name;
+
+      // Download file content
+      const downloaded = await downloadGDriveFile(drive, f.id, f.mimeType);
+      if (!downloaded) {
+        downloadErrors++;
+        continue;
+      }
+
+      syncFiles.push({
+        id: `gdrive_${f.id}`,
+        name: fileName,
+        mimeType: downloaded.finalMime,
+        source: "gdrive",
+        date: f.modifiedTime,
+        size: formatBytes(downloaded.content.length),
+        sizeBytes: downloaded.content.length,
+        folder: folderId || undefined,
+        content: downloaded.content,
+      });
+    }
+
+    const { added, updated } = db.upsertFiles(syncFiles);
     result.filesAdded = added;
     result.filesUpdated = updated;
+
+    if (downloadErrors > 0) {
+      result.errors.push(`${downloadErrors} file(s) failed to download`);
+    }
 
     db.setConnection("gdrive", {
       connected: true,
       lastSync: result.timestamp,
-      fileCount: files.length,
+      fileCount: syncFiles.length,
     });
   } catch (err) {
     result.errors.push(err instanceof Error ? err.message : "Unknown error");
