@@ -1,23 +1,36 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as db from "@/lib/db";
 
+const API_KEY = process.env.API_KEY || "";
+
 /**
- * Open API endpoint for external agents (OpenClaw, etc.)
- * No authentication required.
+ * Secured API endpoint for external agents (OpenClaw, etc.)
+ * Requires API key via header or query param.
+ *
+ * Auth: Header `x-api-key: <key>` OR query param `?key=<key>`
  *
  * Usage:
- *   GET /api/open                         → overview (stats, connections, recent files)
- *   GET /api/open?action=stats            → file/email statistics
- *   GET /api/open?action=emails           → list emails (optional: ?limit=50)
- *   GET /api/open?action=emails&q=invoice → search emails
- *   GET /api/open?action=email&id=xxx     → get single email with body
- *   GET /api/open?action=files            → list all files
- *   GET /api/open?action=files&source=gdrive  → list only gdrive files
- *   GET /api/open?action=search&q=term    → search files
- *   GET /api/open?action=activity         → recent activity log
- *   GET /api/open?action=connections      → connection statuses
+ *   GET /api/open?key=xxx                         → overview (stats, connections, recent files)
+ *   GET /api/open?key=xxx&action=stats            → file/email statistics
+ *   GET /api/open?key=xxx&action=emails           → list emails (optional: &limit=50)
+ *   GET /api/open?key=xxx&action=emails&q=invoice → search emails
+ *   GET /api/open?key=xxx&action=email&id=xxx     → get single email with body
+ *   GET /api/open?key=xxx&action=files            → list all files
+ *   GET /api/open?key=xxx&action=files&source=gdrive  → list only gdrive files
+ *   GET /api/open?key=xxx&action=search&q=term    → search files
+ *   GET /api/open?key=xxx&action=activity         → recent activity log
+ *   GET /api/open?key=xxx&action=connections      → connection statuses
  */
 export async function GET(req: NextRequest) {
+  // Verify API key
+  const headerKey = req.headers.get("x-api-key");
+  const queryKey = req.nextUrl.searchParams.get("key");
+  const providedKey = headerKey || queryKey;
+
+  if (!API_KEY || !providedKey || providedKey !== API_KEY) {
+    return NextResponse.json({ error: "Unauthorized — invalid or missing API key" }, { status: 401 });
+  }
+
   const action = req.nextUrl.searchParams.get("action") || "overview";
 
   try {
