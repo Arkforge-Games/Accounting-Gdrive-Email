@@ -255,7 +255,7 @@ async function syncGDrive(): Promise<SyncResult> {
 
       // Log progress every 50 files
       if (totalSaved % 50 === 0) {
-        console.log(`[GDrive Sync] Progress: ${totalSaved} saved, ${downloadErrors} errors, ${skipped} skipped`);
+        console.log(`[GDrive Sync] Progress: ${totalSaved} saved, ${downloadErrors} errors`);
       }
     }
 
