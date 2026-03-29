@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as db from "@/lib/db";
+import { getTokens, getAuthenticatedClient, extractFolderId } from "@/lib/google";
+import { fetchEmailAttachments } from "@/lib/imap";
 
 const API_KEY = process.env.API_KEY || "";
 
@@ -99,10 +101,22 @@ export async function GET(req: NextRequest) {
         return NextResponse.json(connections);
       }
 
+      case "sync": {
+        const source = req.nextUrl.searchParams.get("source") || "all";
+        // Trigger sync in background by calling the sync API internally
+        const syncUrl = `http://localhost:8325/api/sync${source !== "all" ? `?source=${source}` : ""}`;
+        // Fire and forget — don't wait for completion
+        fetch(syncUrl, {
+          method: "POST",
+          headers: { "Cookie": `session=${req.cookies.get("session")?.value || ""}` },
+        }).catch(() => {});
+        return NextResponse.json({ message: `Sync triggered for: ${source}. Check activity log for progress.` });
+      }
+
       default:
         return NextResponse.json({
           error: `Unknown action: ${action}`,
-          available: ["overview", "stats", "emails", "email", "files", "search", "activity", "connections"],
+          available: ["overview", "stats", "emails", "email", "files", "search", "activity", "connections", "sync"],
         }, { status: 400 });
     }
   } catch (err) {

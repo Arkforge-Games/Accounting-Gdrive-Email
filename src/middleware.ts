@@ -42,6 +42,12 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
+  // Allow localhost/internal requests (server-to-server)
+  const host = req.headers.get("host") || "";
+  if (host.startsWith("localhost") || host.startsWith("127.0.0.1") || host.startsWith("10.0.0.")) {
+    return NextResponse.next();
+  }
+
   const session = req.cookies.get("session")?.value;
   if (!session || !(await verifySession(session))) {
     if (pathname.startsWith("/api/")) {
