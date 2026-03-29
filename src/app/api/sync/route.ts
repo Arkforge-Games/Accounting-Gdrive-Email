@@ -69,14 +69,41 @@ async function downloadGDriveFile(
   }
 }
 
+// Cache of folder ID → folder name
+const folderNameCache: Record<string, string> = {};
+
+async function getFolderName(drive: ReturnType<typeof google.drive>, folderId: string): Promise<string> {
+  if (folderNameCache[folderId]) return folderNameCache[folderId];
+  try {
+    const res = await drive.files.get({ fileId: folderId, fields: "name" });
+    const name = res.data.name || "Untitled";
+    folderNameCache[folderId] = name;
+    return name;
+  } catch {
+    return "Unknown";
+  }
+}
+
+interface DriveFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  modifiedTime: string;
+  size: string | null;
+  parents: string[];
+  folderPath: string;
+}
+
 async function listAllFiles(
   drive: ReturnType<typeof google.drive>,
-  folderId?: string
-): Promise<{ id: string; name: string; mimeType: string; modifiedTime: string; size: string | null; parents: string[] }[]> {
-  const allFiles: { id: string; name: string; mimeType: string; modifiedTime: string; size: string | null; parents: string[] }[] = [];
+  folderId?: string,
+  parentPath?: string
+): Promise<DriveFile[]> {
+  const allFiles: DriveFile[] = [];
   let pageToken: string | undefined;
 
   const query = folderId ? `'${folderId}' in parents and trashed = false` : "trashed = false";
+  const currentPath = parentPath || (folderId ? await getFolderName(drive, folderId) : "My Drive");
 
   do {
     const res = await drive.files.list({
@@ -96,6 +123,7 @@ async function listAllFiles(
         modifiedTime: f.modifiedTime || new Date().toISOString(),
         size: f.size || null,
         parents: (f.parents as string[]) || [],
+        folderPath: currentPath,
       });
     }
 
@@ -106,7 +134,8 @@ async function listAllFiles(
   if (folderId) {
     const subfolders = allFiles.filter((f) => f.mimeType === "application/vnd.google-apps.folder");
     for (const sub of subfolders) {
-      const subFiles = await listAllFiles(drive, sub.id);
+      const subPath = `${currentPath}/${sub.name}`;
+      const subFiles = await listAllFiles(drive, sub.id, subPath);
       allFiles.push(...subFiles);
     }
   }
@@ -167,7 +196,7 @@ async function syncGDrive(): Promise<SyncResult> {
         date: f.modifiedTime,
         size: formatBytes(downloaded.content.length),
         sizeBytes: downloaded.content.length,
-        folder: folderId || undefined,
+        folder: f.folderPath || undefined,
         content: downloaded.content,
       });
     }

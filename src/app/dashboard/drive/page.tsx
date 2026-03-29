@@ -300,7 +300,31 @@ export default function DrivePage() {
             )}
           </div>
         ) : (
-          <FileTable files={filtered} loading={loading} />
+          <>
+            {/* Group files by folder */}
+            {(() => {
+              const folders: Record<string, SyncFile[]> = {};
+              for (const f of filtered) {
+                const folder = f.folder || "My Drive";
+                if (!folders[folder]) folders[folder] = [];
+                folders[folder].push(f);
+              }
+              const folderNames = Object.keys(folders).sort();
+
+              return folderNames.map((folder) => (
+                <div key={folder} className="space-y-2">
+                  <div className="flex items-center gap-2 px-1">
+                    <svg className="w-5 h-5 text-yellow-500" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
+                    </svg>
+                    <span className="font-medium text-sm text-gray-700">{folder}</span>
+                    <span className="text-xs text-gray-400">({folders[folder].length} files)</span>
+                  </div>
+                  <FileTable files={folders[folder]} loading={loading} />
+                </div>
+              ));
+            })()}
+          </>
         )}
       </div>
     </>
