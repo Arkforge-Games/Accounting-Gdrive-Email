@@ -69,21 +69,6 @@ async function downloadGDriveFile(
   }
 }
 
-// Cache of folder ID → folder name
-const folderNameCache: Record<string, string> = {};
-
-async function getFolderName(drive: ReturnType<typeof google.drive>, folderId: string): Promise<string> {
-  if (folderNameCache[folderId]) return folderNameCache[folderId];
-  try {
-    const res = await drive.files.get({ fileId: folderId, fields: "name" });
-    const name = res.data.name || "Untitled";
-    folderNameCache[folderId] = name;
-    return name;
-  } catch {
-    return "Unknown";
-  }
-}
-
 interface DriveFile {
   id: string;
   name: string;
@@ -94,23 +79,24 @@ interface DriveFile {
   folderPath: string;
 }
 
-async function listAllFiles(
+async function listFolder(
   drive: ReturnType<typeof google.drive>,
-  folderId?: string,
-  parentPath?: string
+  folderId: string,
+  folderPath: string,
+  includeShared?: boolean
 ): Promise<DriveFile[]> {
   const allFiles: DriveFile[] = [];
   let pageToken: string | undefined;
 
-  const query = folderId ? `'${folderId}' in parents and trashed = false` : "trashed = false";
-  const currentPath = parentPath || (folderId ? await getFolderName(drive, folderId) : "My Drive");
+  const q = `'${folderId}' in parents and trashed = false`;
 
   do {
     const res = await drive.files.list({
       pageSize: 100,
       fields: "nextPageToken, files(id, name, mimeType, modifiedTime, size, parents)",
       orderBy: "modifiedTime desc",
-      q: query,
+      q,
+      ...(includeShared ? { includeItemsFromAllDrives: true, supportsAllDrives: true } : {}),
       ...(pageToken ? { pageToken } : {}),
     });
 
@@ -123,22 +109,88 @@ async function listAllFiles(
         modifiedTime: f.modifiedTime || new Date().toISOString(),
         size: f.size || null,
         parents: (f.parents as string[]) || [],
-        folderPath: currentPath,
+        folderPath,
       });
     }
 
     pageToken = res.data.nextPageToken || undefined;
   } while (pageToken);
 
-  // If syncing a folder, also recurse into subfolders
-  if (folderId) {
-    const subfolders = allFiles.filter((f) => f.mimeType === "application/vnd.google-apps.folder");
-    for (const sub of subfolders) {
-      const subPath = `${currentPath}/${sub.name}`;
-      const subFiles = await listAllFiles(drive, sub.id, subPath);
-      allFiles.push(...subFiles);
-    }
+  // Recurse into subfolders
+  const subfolders = allFiles.filter((f) => f.mimeType === "application/vnd.google-apps.folder");
+  for (const sub of subfolders) {
+    const subPath = folderPath ? `${folderPath}/${sub.name}` : sub.name;
+    console.log(`[GDrive Sync] Scanning folder: ${subPath}`);
+    const subFiles = await listFolder(drive, sub.id, subPath, includeShared);
+    allFiles.push(...subFiles);
   }
+
+  return allFiles;
+}
+
+async function listAllFiles(
+  drive: ReturnType<typeof google.drive>,
+  folderId?: string
+): Promise<DriveFile[]> {
+  if (folderId) {
+    // Sync a specific folder
+    let folderName = "My Drive";
+    try {
+      const res = await drive.files.get({ fileId: folderId, fields: "name", supportsAllDrives: true });
+      folderName = res.data.name || "My Drive";
+    } catch { /* use default */ }
+    return listFolder(drive, folderId, folderName, true);
+  }
+
+  // No folder specified — sync My Drive root + Shared with me
+  const allFiles: DriveFile[] = [];
+
+  // 1. My Drive root
+  console.log("[GDrive Sync] Scanning My Drive...");
+  const myDriveFiles = await listFolder(drive, "root", "My Drive");
+  allFiles.push(...myDriveFiles);
+
+  // 2. Shared with me (top-level shared files/folders)
+  console.log("[GDrive Sync] Scanning Shared with me...");
+  let pageToken: string | undefined;
+  do {
+    const res = await drive.files.list({
+      pageSize: 100,
+      fields: "nextPageToken, files(id, name, mimeType, modifiedTime, size, parents)",
+      orderBy: "modifiedTime desc",
+      q: "sharedWithMe = true and trashed = false",
+      includeItemsFromAllDrives: true,
+      supportsAllDrives: true,
+      ...(pageToken ? { pageToken } : {}),
+    });
+
+    const files = res.data.files || [];
+    for (const f of files) {
+      if (f.mimeType === "application/vnd.google-apps.folder") {
+        // Recurse into shared folders
+        const sharedPath = `Shared with me/${f.name}`;
+        console.log(`[GDrive Sync] Scanning shared folder: ${sharedPath}`);
+        allFiles.push({
+          id: f.id!, name: f.name || "Untitled", mimeType: f.mimeType!,
+          modifiedTime: f.modifiedTime || new Date().toISOString(),
+          size: f.size || null, parents: (f.parents as string[]) || [],
+          folderPath: "Shared with me",
+        });
+        const subFiles = await listFolder(drive, f.id!, sharedPath, true);
+        allFiles.push(...subFiles);
+      } else {
+        allFiles.push({
+          id: f.id!, name: f.name || "Untitled",
+          mimeType: f.mimeType || "application/octet-stream",
+          modifiedTime: f.modifiedTime || new Date().toISOString(),
+          size: f.size || null, parents: (f.parents as string[]) || [],
+          folderPath: "Shared with me",
+        });
+      }
+    }
+
+    pageToken = res.data.nextPageToken || undefined;
+  } while (pageToken);
 
   return allFiles;
 }
