@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
 
     cookieStore.set("session", token, {
       httpOnly: true,
-      secure: req.url.startsWith("https"),
+      secure: (process.env.NEXTAUTH_URL || req.url).startsWith("https"),
       sameSite: "lax",
       path: "/",
       maxAge: 60 * 60 * 24 * 7, // 7 days

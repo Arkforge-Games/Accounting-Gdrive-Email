@@ -11,5 +11,6 @@ export async function GET(req: NextRequest) {
   const { tokens } = await client.getToken(code);
   setTokens(tokens);
 
-  return NextResponse.redirect(new URL("/dashboard", req.url));
+  const baseUrl = process.env.NEXTAUTH_URL || req.url;
+  return NextResponse.redirect(new URL("/dashboard/drive", baseUrl));
 }

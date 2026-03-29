@@ -17,5 +17,6 @@ export async function GET(req: NextRequest) {
     setAccessToken(result.accessToken);
   }
 
-  return NextResponse.redirect(new URL("/dashboard", req.url));
+  const baseUrl = process.env.NEXTAUTH_URL || req.url;
+  return NextResponse.redirect(new URL("/dashboard", baseUrl));
 }
