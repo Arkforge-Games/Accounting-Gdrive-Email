@@ -223,34 +223,13 @@ async function syncGDrive(): Promise<SyncResult> {
     const downloadable = driveFiles.filter((f) => !SKIP_MIMES.has(f.mimeType));
     console.log(`[GDrive Sync] ${downloadable.length} downloadable files`);
 
-    const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB limit per file
     let downloadErrors = 0;
-    let skipped = 0;
     let totalSaved = 0;
 
     for (let i = 0; i < downloadable.length; i++) {
       const f = downloadable[i];
       const exportInfo = EXPORT_MIMES[f.mimeType];
       const fileName = exportInfo ? `${f.name}${exportInfo.ext}` : f.name;
-
-      // Skip large files to prevent OOM
-      if (f.size && Number(f.size) > MAX_FILE_SIZE) {
-        console.log(`[GDrive Sync] Skipping ${i + 1}/${downloadable.length} (too large: ${formatBytes(Number(f.size))}): ${fileName}`);
-        // Save metadata only (no content)
-        db.upsertFiles([{
-          id: `gdrive_${f.id}`,
-          name: fileName,
-          mimeType: exportInfo?.mime || f.mimeType,
-          source: "gdrive",
-          date: f.modifiedTime,
-          size: formatBytes(Number(f.size)),
-          sizeBytes: Number(f.size),
-          folder: f.folderPath || undefined,
-        }]);
-        skipped++;
-        totalSaved++;
-        continue;
-      }
 
       console.log(`[GDrive Sync] Downloading ${i + 1}/${downloadable.length}: ${fileName}`);
 
@@ -286,17 +265,13 @@ async function syncGDrive(): Promise<SyncResult> {
     if (downloadErrors > 0) {
       result.errors.push(`${downloadErrors} file(s) failed to download`);
     }
-    if (skipped > 0) {
-      console.log(`[GDrive Sync] Skipped ${skipped} files over 50MB`);
-    }
-
     db.setConnection("gdrive", {
       connected: true,
       lastSync: result.timestamp,
       fileCount: totalSaved,
     });
 
-    console.log(`[GDrive Sync] Done — ${totalSaved} saved, ${downloadErrors} errors, ${skipped} skipped (>50MB)`);
+    console.log(`[GDrive Sync] Done — ${totalSaved} saved, ${downloadErrors} errors`);
   } catch (err) {
     console.error("[GDrive Sync] Error:", err);
     result.errors.push(err instanceof Error ? err.message : "Unknown error");
