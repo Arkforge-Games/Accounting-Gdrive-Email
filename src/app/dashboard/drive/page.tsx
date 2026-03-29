@@ -11,12 +11,14 @@ export default function DrivePage() {
   const [files, setFiles] = useState<SyncFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  const [syncResult, setSyncResult] = useState<string | null>(null);
+  const [syncStatus, setSyncStatus] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [folderLink, setFolderLink] = useState("");
   const [savedFolder, setSavedFolder] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [showFilters, setShowFilters] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [oauthMessage, setOauthMessage] = useState<string | null>(null);
 
   const loadFiles = useCallback(() => {
     fetch("/api/files")
@@ -32,7 +34,19 @@ export default function DrivePage() {
   useEffect(() => {
     loadFiles();
 
-    // Load settings and connection status
+    // Check URL params for OAuth result
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("connected") === "true") {
+      setOauthMessage("Google Drive connected successfully! You can now sync your files.");
+      setConnected(true);
+      // Clean URL
+      window.history.replaceState({}, "", "/dashboard/drive");
+    } else if (params.get("error")) {
+      const err = params.get("error");
+      setOauthMessage(`Connection failed: ${err === "oauth_failed" ? "Google OAuth failed — try again" : err}`);
+      window.history.replaceState({}, "", "/dashboard/drive");
+    }
+
     fetch("/api/settings")
       .then((r) => r.json())
       .then((s) => {
@@ -58,24 +72,40 @@ export default function DrivePage() {
 
   const syncDrive = async () => {
     setSyncing(true);
-    setSyncResult(null);
+    setSyncStatus("Connecting to Google Drive...");
+    setSyncError(null);
+    setOauthMessage(null);
+
     try {
-      // Save folder first if changed
       if (folderLink !== savedFolder) {
+        setSyncStatus("Saving folder settings...");
         await saveFolder();
       }
+
+      setSyncStatus("Fetching file list from Google Drive...");
+
       const res = await fetch("/api/sync?source=gdrive", { method: "POST" });
       const data = await res.json();
       const result = data.results?.[0];
+
       if (result?.errors?.length > 0) {
-        setSyncResult(`Error: ${result.errors.join(", ")}`);
+        setSyncError(result.errors.join(", "));
+        setSyncStatus(null);
       } else {
-        setSyncResult(`Synced ${result?.filesAdded || 0} new, ${result?.filesUpdated || 0} updated files`);
+        const added = result?.filesAdded || 0;
+        const updated = result?.filesUpdated || 0;
+        const total = added + updated;
+        if (total === 0) {
+          setSyncStatus("Sync complete — no new files found. Make sure the folder link is correct or try syncing all files (leave folder blank).");
+        } else {
+          setSyncStatus(`Sync complete! ${added} new file${added !== 1 ? "s" : ""} added, ${updated} updated.`);
+        }
         loadFiles();
         setConnected(true);
       }
-    } catch {
-      setSyncResult("Sync failed — check connection");
+    } catch (err) {
+      setSyncError(`Sync failed: ${err instanceof Error ? err.message : "Connection error"}`);
+      setSyncStatus(null);
     } finally {
       setSyncing(false);
     }
@@ -95,6 +125,13 @@ export default function DrivePage() {
     <>
       <TopBar title="Google Drive" subtitle={`${files.length} files synced`} />
       <div className="p-6 space-y-5">
+        {/* OAuth feedback */}
+        {oauthMessage && (
+          <div className={`text-sm px-4 py-3 rounded-lg ${oauthMessage.includes("failed") ? "bg-red-50 text-red-700 border border-red-200" : "bg-green-50 text-green-700 border border-green-200"}`}>
+            {oauthMessage}
+          </div>
+        )}
+
         {/* Connection & Folder Config */}
         <div className={`${cx.card} p-5 space-y-4`}>
           <div className="flex items-center justify-between">
@@ -109,9 +146,9 @@ export default function DrivePage() {
               </div>
               <div>
                 <div className="font-semibold text-sm">Google Drive</div>
-                <div className="text-xs text-gray-400">
+                <div className="text-xs">
                   {connected ? (
-                    <span className="text-green-600">Connected</span>
+                    <span className="text-green-600 font-medium">Connected</span>
                   ) : (
                     <span className="text-gray-400">Not connected</span>
                   )}
@@ -121,6 +158,11 @@ export default function DrivePage() {
             {!connected && (
               <a href="/api/auth/google" className={cx.btnPrimary}>
                 Connect Google Drive
+              </a>
+            )}
+            {connected && (
+              <a href="/api/auth/google" className={`${cx.btnSecondary} text-xs`}>
+                Reconnect
               </a>
             )}
           </div>
@@ -140,7 +182,7 @@ export default function DrivePage() {
               />
               <button
                 onClick={syncDrive}
-                disabled={syncing}
+                disabled={syncing || !connected}
                 className={cx.btnPrimary}
               >
                 <IconSync className={`w-4 h-4 ${syncing ? "animate-spin" : ""}`} />
@@ -152,10 +194,35 @@ export default function DrivePage() {
             </p>
           </div>
 
+          {/* Sync Progress */}
+          {syncing && syncStatus && (
+            <div className="flex items-center gap-3 text-sm px-4 py-3 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg">
+              <svg className="w-4 h-4 animate-spin shrink-0" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              {syncStatus}
+            </div>
+          )}
+
           {/* Sync Result */}
-          {syncResult && (
-            <div className={`text-sm px-3 py-2 rounded-lg ${syncResult.startsWith("Error") ? "bg-red-50 text-red-600 border border-red-200" : "bg-green-50 text-green-600 border border-green-200"}`}>
-              {syncResult}
+          {!syncing && syncStatus && (
+            <div className="text-sm px-4 py-3 rounded-lg bg-green-50 text-green-700 border border-green-200">
+              {syncStatus}
+            </div>
+          )}
+
+          {/* Sync Error */}
+          {syncError && (
+            <div className="text-sm px-4 py-3 rounded-lg bg-red-50 text-red-700 border border-red-200">
+              {syncError}
+            </div>
+          )}
+
+          {/* Not connected warning */}
+          {!connected && !oauthMessage && (
+            <div className="text-sm px-4 py-3 rounded-lg bg-yellow-50 text-yellow-700 border border-yellow-200">
+              Connect your Google account first before syncing files.
             </div>
           )}
         </div>

@@ -120,29 +120,37 @@ async function syncGDrive(): Promise<SyncResult> {
   try {
     const tokens = getTokens();
     if (!tokens) {
-      result.errors.push("Not authenticated with Google. Go to Settings → Connect Google Drive.");
+      console.log("[GDrive Sync] No tokens found — not authenticated");
+      result.errors.push("Not authenticated with Google. Go to Google Drive page → Connect Google Drive.");
       return result;
     }
 
+    console.log("[GDrive Sync] Starting sync...");
     const auth = getAuthenticatedClient();
     const drive = google.drive({ version: "v3", auth });
 
     // Check if a specific folder is configured
     const folderSetting = db.getSetting("gdrive_folder");
     const folderId = folderSetting ? extractFolderId(folderSetting) : undefined;
+    console.log("[GDrive Sync] Folder:", folderId || "(all files)");
 
     // List all files (with pagination + subfolder recursion)
     const driveFiles = await listAllFiles(drive, folderId);
+    console.log(`[GDrive Sync] Found ${driveFiles.length} total items`);
 
     // Filter out non-downloadable types
     const downloadable = driveFiles.filter((f) => !SKIP_MIMES.has(f.mimeType));
+    console.log(`[GDrive Sync] ${downloadable.length} downloadable files`);
 
     const syncFiles: (SyncFile & { content?: Buffer })[] = [];
     let downloadErrors = 0;
 
-    for (const f of downloadable) {
+    for (let i = 0; i < downloadable.length; i++) {
+      const f = downloadable[i];
       const exportInfo = EXPORT_MIMES[f.mimeType];
       const fileName = exportInfo ? `${f.name}${exportInfo.ext}` : f.name;
+
+      console.log(`[GDrive Sync] Downloading ${i + 1}/${downloadable.length}: ${fileName}`);
 
       // Download file content
       const downloaded = await downloadGDriveFile(drive, f.id, f.mimeType);
@@ -164,6 +172,7 @@ async function syncGDrive(): Promise<SyncResult> {
       });
     }
 
+    console.log(`[GDrive Sync] Saving ${syncFiles.length} files to database...`);
     const { added, updated } = db.upsertFiles(syncFiles);
     result.filesAdded = added;
     result.filesUpdated = updated;
@@ -177,7 +186,10 @@ async function syncGDrive(): Promise<SyncResult> {
       lastSync: result.timestamp,
       fileCount: syncFiles.length,
     });
+
+    console.log(`[GDrive Sync] Done — ${added} added, ${updated} updated, ${downloadErrors} errors`);
   } catch (err) {
+    console.error("[GDrive Sync] Error:", err);
     result.errors.push(err instanceof Error ? err.message : "Unknown error");
   }
 
