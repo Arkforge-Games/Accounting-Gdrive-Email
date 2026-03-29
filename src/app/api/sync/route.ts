@@ -223,24 +223,45 @@ async function syncGDrive(): Promise<SyncResult> {
     const downloadable = driveFiles.filter((f) => !SKIP_MIMES.has(f.mimeType));
     console.log(`[GDrive Sync] ${downloadable.length} downloadable files`);
 
-    const syncFiles: (SyncFile & { content?: Buffer })[] = [];
+    const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB limit per file
     let downloadErrors = 0;
+    let skipped = 0;
+    let totalSaved = 0;
 
     for (let i = 0; i < downloadable.length; i++) {
       const f = downloadable[i];
       const exportInfo = EXPORT_MIMES[f.mimeType];
       const fileName = exportInfo ? `${f.name}${exportInfo.ext}` : f.name;
 
+      // Skip large files to prevent OOM
+      if (f.size && Number(f.size) > MAX_FILE_SIZE) {
+        console.log(`[GDrive Sync] Skipping ${i + 1}/${downloadable.length} (too large: ${formatBytes(Number(f.size))}): ${fileName}`);
+        // Save metadata only (no content)
+        db.upsertFiles([{
+          id: `gdrive_${f.id}`,
+          name: fileName,
+          mimeType: exportInfo?.mime || f.mimeType,
+          source: "gdrive",
+          date: f.modifiedTime,
+          size: formatBytes(Number(f.size)),
+          sizeBytes: Number(f.size),
+          folder: f.folderPath || undefined,
+        }]);
+        skipped++;
+        totalSaved++;
+        continue;
+      }
+
       console.log(`[GDrive Sync] Downloading ${i + 1}/${downloadable.length}: ${fileName}`);
 
-      // Download file content
       const downloaded = await downloadGDriveFile(drive, f.id, f.mimeType);
       if (!downloaded) {
         downloadErrors++;
         continue;
       }
 
-      syncFiles.push({
+      // Save immediately to DB (not batched) to prevent OOM
+      db.upsertFiles([{
         id: `gdrive_${f.id}`,
         name: fileName,
         mimeType: downloaded.finalMime,
@@ -250,25 +271,32 @@ async function syncGDrive(): Promise<SyncResult> {
         sizeBytes: downloaded.content.length,
         folder: f.folderPath || undefined,
         content: downloaded.content,
-      });
+      }]);
+      totalSaved++;
+
+      // Log progress every 50 files
+      if (totalSaved % 50 === 0) {
+        console.log(`[GDrive Sync] Progress: ${totalSaved} saved, ${downloadErrors} errors, ${skipped} skipped`);
+      }
     }
 
-    console.log(`[GDrive Sync] Saving ${syncFiles.length} files to database...`);
-    const { added, updated } = db.upsertFiles(syncFiles);
-    result.filesAdded = added;
-    result.filesUpdated = updated;
+    result.filesAdded = totalSaved;
+    result.filesUpdated = 0;
 
     if (downloadErrors > 0) {
       result.errors.push(`${downloadErrors} file(s) failed to download`);
+    }
+    if (skipped > 0) {
+      console.log(`[GDrive Sync] Skipped ${skipped} files over 50MB`);
     }
 
     db.setConnection("gdrive", {
       connected: true,
       lastSync: result.timestamp,
-      fileCount: syncFiles.length,
+      fileCount: totalSaved,
     });
 
-    console.log(`[GDrive Sync] Done — ${added} added, ${updated} updated, ${downloadErrors} errors`);
+    console.log(`[GDrive Sync] Done — ${totalSaved} saved, ${downloadErrors} errors, ${skipped} skipped (>50MB)`);
   } catch (err) {
     console.error("[GDrive Sync] Error:", err);
     result.errors.push(err instanceof Error ? err.message : "Unknown error");
