@@ -94,6 +94,26 @@ function initSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_files_email_id ON files(email_id);
     CREATE INDEX IF NOT EXISTS idx_activity_timestamp ON activity(timestamp);
 
+    CREATE TABLE IF NOT EXISTS file_index (
+      file_id TEXT PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+      category TEXT NOT NULL DEFAULT 'uncategorized',
+      status TEXT NOT NULL DEFAULT 'pending',
+      period TEXT,
+      notes TEXT,
+      vendor TEXT,
+      amount TEXT,
+      currency TEXT DEFAULT 'PHP',
+      reference_no TEXT,
+      auto_categorized INTEGER DEFAULT 0,
+      indexed_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_file_index_category ON file_index(category);
+    CREATE INDEX IF NOT EXISTS idx_file_index_status ON file_index(status);
+    CREATE INDEX IF NOT EXISTS idx_file_index_period ON file_index(period);
+    CREATE INDEX IF NOT EXISTS idx_file_index_vendor ON file_index(vendor);
+
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL,
@@ -477,6 +497,215 @@ function rowToFile(row: DbFile): SyncFile {
     emailFrom: row.email_from || undefined,
     tags: row.tags ? JSON.parse(row.tags) : undefined,
   };
+}
+
+// ===== File Index (Accounting) =====
+
+export interface FileIndexRecord {
+  file_id: string;
+  category: string;
+  status: string;
+  period: string | null;
+  notes: string | null;
+  vendor: string | null;
+  amount: string | null;
+  currency: string;
+  reference_no: string | null;
+  auto_categorized: number;
+  indexed_at: string;
+  updated_at: string;
+}
+
+export interface IndexedFile extends SyncFile {
+  category: string;
+  accountingStatus: string;
+  period: string | null;
+  notes: string | null;
+  vendor: string | null;
+  amount: string | null;
+  currency: string;
+  referenceNo: string | null;
+  autoCategorized: boolean;
+}
+
+export function upsertFileIndex(entry: {
+  fileId: string;
+  category: string;
+  status?: string;
+  period?: string;
+  notes?: string;
+  vendor?: string;
+  amount?: string;
+  currency?: string;
+  referenceNo?: string;
+  autoCategorized?: boolean;
+}) {
+  getDb().prepare(`
+    INSERT INTO file_index (file_id, category, status, period, notes, vendor, amount, currency, reference_no, auto_categorized, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(file_id) DO UPDATE SET
+      category = excluded.category,
+      status = CASE WHEN excluded.status != 'pending' THEN excluded.status ELSE file_index.status END,
+      period = COALESCE(excluded.period, file_index.period),
+      notes = COALESCE(excluded.notes, file_index.notes),
+      vendor = COALESCE(excluded.vendor, file_index.vendor),
+      amount = COALESCE(excluded.amount, file_index.amount),
+      currency = COALESCE(excluded.currency, file_index.currency),
+      reference_no = COALESCE(excluded.reference_no, file_index.reference_no),
+      auto_categorized = excluded.auto_categorized,
+      updated_at = datetime('now')
+  `).run(
+    entry.fileId,
+    entry.category,
+    entry.status || "pending",
+    entry.period || null,
+    entry.notes || null,
+    entry.vendor || null,
+    entry.amount || null,
+    entry.currency || "PHP",
+    entry.referenceNo || null,
+    entry.autoCategorized ? 1 : 0
+  );
+}
+
+export function updateFileIndex(fileId: string, updates: Partial<{
+  category: string;
+  status: string;
+  period: string;
+  notes: string;
+  vendor: string;
+  amount: string;
+  currency: string;
+  referenceNo: string;
+}>) {
+  const d = getDb();
+  const sets: string[] = [];
+  const params: (string | null)[] = [];
+
+  if (updates.category !== undefined) { sets.push("category = ?"); params.push(updates.category); }
+  if (updates.status !== undefined) { sets.push("status = ?"); params.push(updates.status); }
+  if (updates.period !== undefined) { sets.push("period = ?"); params.push(updates.period); }
+  if (updates.notes !== undefined) { sets.push("notes = ?"); params.push(updates.notes); }
+  if (updates.vendor !== undefined) { sets.push("vendor = ?"); params.push(updates.vendor); }
+  if (updates.amount !== undefined) { sets.push("amount = ?"); params.push(updates.amount); }
+  if (updates.currency !== undefined) { sets.push("currency = ?"); params.push(updates.currency); }
+  if (updates.referenceNo !== undefined) { sets.push("reference_no = ?"); params.push(updates.referenceNo); }
+
+  if (sets.length === 0) return;
+  sets.push("updated_at = datetime('now')");
+  params.push(fileId);
+
+  d.prepare(`UPDATE file_index SET ${sets.join(", ")} WHERE file_id = ?`).run(...params);
+}
+
+export function getFileIndex(fileId: string): FileIndexRecord | undefined {
+  return getDb().prepare("SELECT * FROM file_index WHERE file_id = ?").get(fileId) as FileIndexRecord | undefined;
+}
+
+export function getIndexedFiles(filters?: {
+  category?: string;
+  status?: string;
+  period?: string;
+  vendor?: string;
+  search?: string;
+}): IndexedFile[] {
+  let sql = `
+    SELECT f.*, fi.category, fi.status as accounting_status, fi.period, fi.notes,
+           fi.vendor, fi.amount, fi.currency, fi.reference_no, fi.auto_categorized
+    FROM files f
+    LEFT JOIN file_index fi ON f.id = fi.file_id
+    WHERE 1=1
+  `;
+  const params: string[] = [];
+
+  if (filters?.category && filters.category !== "all") {
+    if (filters.category === "uncategorized") {
+      sql += " AND (fi.category IS NULL OR fi.category = 'uncategorized')";
+    } else {
+      sql += " AND fi.category = ?";
+      params.push(filters.category);
+    }
+  }
+  if (filters?.status && filters.status !== "all") {
+    sql += " AND fi.status = ?";
+    params.push(filters.status);
+  }
+  if (filters?.period) {
+    sql += " AND fi.period = ?";
+    params.push(filters.period);
+  }
+  if (filters?.vendor) {
+    sql += " AND fi.vendor LIKE ?";
+    params.push(`%${filters.vendor}%`);
+  }
+  if (filters?.search) {
+    sql += " AND (f.name LIKE ? OR f.email_subject LIKE ? OR f.email_from LIKE ? OR fi.notes LIKE ? OR fi.vendor LIKE ?)";
+    const q = `%${filters.search}%`;
+    params.push(q, q, q, q, q);
+  }
+
+  sql += " ORDER BY f.date DESC";
+
+  const rows = getDb().prepare(sql).all(...params) as (DbFile & {
+    category: string | null;
+    accounting_status: string | null;
+    period: string | null;
+    notes: string | null;
+    vendor: string | null;
+    amount: string | null;
+    currency: string | null;
+    reference_no: string | null;
+    auto_categorized: number | null;
+  })[];
+
+  return rows.map((row) => ({
+    ...rowToFile(row),
+    category: row.category || "uncategorized",
+    accountingStatus: row.accounting_status || "pending",
+    period: row.period,
+    notes: row.notes,
+    vendor: row.vendor,
+    amount: row.amount,
+    currency: row.currency || "PHP",
+    referenceNo: row.reference_no,
+    autoCategorized: row.auto_categorized === 1,
+  }));
+}
+
+export function getAccountingSummary(): {
+  byCategory: { category: string; count: number }[];
+  byStatus: { status: string; count: number }[];
+  byPeriod: { period: string; count: number }[];
+  totalIndexed: number;
+  totalUnindexed: number;
+} {
+  const d = getDb();
+
+  const byCategory = d.prepare(`
+    SELECT COALESCE(fi.category, 'uncategorized') as category, COUNT(*) as count
+    FROM files f LEFT JOIN file_index fi ON f.id = fi.file_id
+    GROUP BY COALESCE(fi.category, 'uncategorized')
+    ORDER BY count DESC
+  `).all() as { category: string; count: number }[];
+
+  const byStatus = d.prepare(`
+    SELECT COALESCE(fi.status, 'pending') as status, COUNT(*) as count
+    FROM files f LEFT JOIN file_index fi ON f.id = fi.file_id
+    GROUP BY COALESCE(fi.status, 'pending')
+    ORDER BY count DESC
+  `).all() as { status: string; count: number }[];
+
+  const byPeriod = d.prepare(`
+    SELECT COALESCE(fi.period, strftime('%Y-%m', f.date)) as period, COUNT(*) as count
+    FROM files f LEFT JOIN file_index fi ON f.id = fi.file_id
+    GROUP BY COALESCE(fi.period, strftime('%Y-%m', f.date))
+    ORDER BY period DESC
+  `).all() as { period: string; count: number }[];
+
+  const totalIndexed = (d.prepare("SELECT COUNT(*) as c FROM file_index WHERE category != 'uncategorized'").get() as { c: number }).c;
+  const totalFiles = (d.prepare("SELECT COUNT(*) as c FROM files").get() as { c: number }).c;
+
+  return { byCategory, byStatus, byPeriod, totalIndexed, totalUnindexed: totalFiles - totalIndexed };
 }
 
 // ===== Settings =====

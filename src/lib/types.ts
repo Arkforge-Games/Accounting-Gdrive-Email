@@ -15,6 +15,18 @@ export interface SyncFile {
   previewUrl?: string;
 }
 
+export interface IndexedFile extends SyncFile {
+  category: string;
+  accountingStatus: string;
+  period: string | null;
+  notes: string | null;
+  vendor: string | null;
+  amount: string | null;
+  currency: string;
+  referenceNo: string | null;
+  autoCategorized: boolean;
+}
+
 export interface SyncStatus {
   gdrive: ConnectionStatus;
   outlook: ConnectionStatus;

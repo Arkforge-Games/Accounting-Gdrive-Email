@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import * as db from "@/lib/db";
 import { getTokens, getAuthenticatedClient, extractFolderId } from "@/lib/google";
 import { fetchEmailAttachments } from "@/lib/imap";
+import { CATEGORIES, STATUSES } from "@/lib/categorize";
 
 const API_KEY = process.env.API_KEY || "";
 
@@ -101,6 +102,21 @@ export async function GET(req: NextRequest) {
         return NextResponse.json(connections);
       }
 
+      case "accounting": {
+        const subAction = req.nextUrl.searchParams.get("sub") || "summary";
+        if (subAction === "summary") {
+          const summary = db.getAccountingSummary();
+          return NextResponse.json({ ...summary, categories: CATEGORIES, statuses: STATUSES });
+        }
+        const files = db.getIndexedFiles({
+          category: req.nextUrl.searchParams.get("category") || undefined,
+          status: req.nextUrl.searchParams.get("status") || undefined,
+          period: req.nextUrl.searchParams.get("period") || undefined,
+          search: req.nextUrl.searchParams.get("q") || undefined,
+        });
+        return NextResponse.json({ files, count: files.length });
+      }
+
       case "sync": {
         const source = req.nextUrl.searchParams.get("source") || "all";
         // Trigger sync in background by calling the sync API internally
@@ -116,7 +132,7 @@ export async function GET(req: NextRequest) {
       default:
         return NextResponse.json({
           error: `Unknown action: ${action}`,
-          available: ["overview", "stats", "emails", "email", "files", "search", "activity", "connections", "sync"],
+          available: ["overview", "stats", "emails", "email", "files", "search", "activity", "connections", "accounting", "sync"],
         }, { status: 400 });
     }
   } catch (err) {
