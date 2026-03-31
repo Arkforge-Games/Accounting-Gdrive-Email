@@ -15,12 +15,14 @@ import {
   IconDrive,
   IconAccounting,
   IconXero,
+  IconWise,
 } from "./icons";
 
 const links = [
   { href: "/dashboard", label: "Overview", icon: IconDashboard },
   { href: "/dashboard/accounting", label: "Accounting Index", icon: IconAccounting },
   { href: "/dashboard/xero", label: "Xero", icon: IconXero },
+  { href: "/dashboard/wise", label: "Wise", icon: IconWise },
   { href: "/dashboard/emails", label: "Emails", icon: IconMail },
   { href: "/dashboard/files", label: "Attachments", icon: IconFiles },
   { href: "/dashboard/drive", label: "Google Drive", icon: IconDrive },

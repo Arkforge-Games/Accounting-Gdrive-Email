@@ -4,6 +4,7 @@ import { getTokens, getAuthenticatedClient, extractFolderId } from "@/lib/google
 import { fetchEmailAttachments } from "@/lib/imap";
 import { CATEGORIES, STATUSES } from "@/lib/categorize";
 import * as xero from "@/lib/xero";
+import * as wise from "@/lib/wise";
 
 const API_KEY = process.env.API_KEY || "";
 
@@ -103,6 +104,50 @@ export async function GET(req: NextRequest) {
         return NextResponse.json(connections);
       }
 
+      case "wise": {
+        if (!wise.isWiseConfigured()) {
+          return NextResponse.json({ error: "Wise API token not configured" }, { status: 500 });
+        }
+        const sub = req.nextUrl.searchParams.get("sub") || "summary";
+        try {
+          switch (sub) {
+            case "summary": {
+              const summary = await wise.getWiseSummary();
+              return NextResponse.json(summary);
+            }
+            case "balances": {
+              const profile = await wise.getBusinessProfile();
+              if (!profile) return NextResponse.json({ error: "No profile" }, { status: 404 });
+              const balances = await wise.getBalances(profile.id);
+              return NextResponse.json({ balances });
+            }
+            case "transfers": {
+              const profile = await wise.getBusinessProfile();
+              if (!profile) return NextResponse.json({ error: "No profile" }, { status: 404 });
+              const limit = parseInt(req.nextUrl.searchParams.get("limit") || "20");
+              const transfers = await wise.getTransfers(profile.id, limit);
+              return NextResponse.json({ transfers, count: transfers.length });
+            }
+            case "recipients": {
+              const profile = await wise.getBusinessProfile();
+              if (!profile) return NextResponse.json({ error: "No profile" }, { status: 404 });
+              const recipients = await wise.getRecipients(profile.id);
+              return NextResponse.json({ recipients, count: recipients.length });
+            }
+            case "rate": {
+              const source = req.nextUrl.searchParams.get("source") || "HKD";
+              const target = req.nextUrl.searchParams.get("target") || "PHP";
+              const rates = await wise.getExchangeRate(source, target);
+              return NextResponse.json({ rates });
+            }
+            default:
+              return NextResponse.json({ error: `Unknown wise sub: ${sub}`, available: ["summary", "balances", "transfers", "recipients", "rate"] });
+          }
+        } catch (err) {
+          return NextResponse.json({ error: err instanceof Error ? err.message : "Wise API error" }, { status: 500 });
+        }
+      }
+
       case "xero": {
         const sub = req.nextUrl.searchParams.get("sub") || "status";
         try {
@@ -174,7 +219,7 @@ export async function GET(req: NextRequest) {
       default:
         return NextResponse.json({
           error: `Unknown action: ${action}`,
-          available: ["overview", "stats", "emails", "email", "files", "search", "activity", "connections", "accounting", "xero", "sync"],
+          available: ["overview", "stats", "emails", "email", "files", "search", "activity", "connections", "accounting", "wise", "xero", "sync"],
         }, { status: 400 });
     }
   } catch (err) {
