@@ -125,6 +125,12 @@ function initSchema(db: Database.Database) {
       tokens TEXT NOT NULL,
       updated_at TEXT DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS wise_cache (
+      key TEXT PRIMARY KEY,
+      data TEXT NOT NULL,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS xero_tokens (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       tokens TEXT NOT NULL,
@@ -780,6 +786,35 @@ export function loadXeroTokens(): { tokens: Record<string, unknown>; tenantId: s
 
 export function clearXeroTokens() {
   getDb().prepare("DELETE FROM xero_tokens WHERE id = 1").run();
+}
+
+// ===== Wise Cache =====
+
+export function setWiseCache(key: string, data: unknown) {
+  getDb().prepare(
+    "INSERT INTO wise_cache (key, data, updated_at) VALUES (?, ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET data = excluded.data, updated_at = datetime('now')"
+  ).run(key, JSON.stringify(data));
+}
+
+export function getWiseCache(key: string): { data: unknown; updatedAt: string } | null {
+  const row = getDb().prepare("SELECT data, updated_at FROM wise_cache WHERE key = ?").get(key) as { data: string; updated_at: string } | undefined;
+  if (!row) return null;
+  try { return { data: JSON.parse(row.data), updatedAt: row.updated_at }; } catch { return null; }
+}
+
+export function getWiseCacheAge(key: string): number | null {
+  const row = getDb().prepare("SELECT updated_at FROM wise_cache WHERE key = ?").get(key) as { updated_at: string } | undefined;
+  if (!row) return null;
+  return Date.now() - new Date(row.updated_at).getTime();
+}
+
+export function getAllWiseCache(): Record<string, { data: unknown; updatedAt: string }> {
+  const rows = getDb().prepare("SELECT key, data, updated_at FROM wise_cache").all() as { key: string; data: string; updated_at: string }[];
+  const result: Record<string, { data: unknown; updatedAt: string }> = {};
+  for (const row of rows) {
+    try { result[row.key] = { data: JSON.parse(row.data), updatedAt: row.updated_at }; } catch { /* skip */ }
+  }
+  return result;
 }
 
 // ===== Helpers =====

@@ -58,6 +58,18 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ transfers, count: transfers.length, profileId: resolvedId });
       }
 
+      case "sync": {
+        const result = await wise.syncWiseData();
+        return NextResponse.json({ message: "Wise data synced and cached", ...result });
+      }
+
+      case "cached": {
+        const key = req.nextUrl.searchParams.get("key") || "last_sync";
+        const data = wise.getCachedWiseData(key);
+        if (!data) return NextResponse.json({ error: `No cached data for key: ${key}`, available: ["last_sync", "profiles", "business_profile", "business_balances", "business_transfers", "business_transfer_stats", "business_recipients", "personal_profile", "personal_transfers", "exchange_rates"] }, { status: 404 });
+        return NextResponse.json({ key, data });
+      }
+
       case "all-data": {
         // Full dump for AI agents — all profiles, balances, transfers, recipients
         const profiles = await wise.getProfiles();

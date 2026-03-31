@@ -1,3 +1,5 @@
+import { setWiseCache, getWiseCache, addActivity } from "./db";
+
 const WISE_API_TOKEN = process.env.WISE_API_TOKEN || "";
 const WISE_BASE = "https://api.wise.com";
 
@@ -241,4 +243,102 @@ export async function getWiseSummary(): Promise<{
   }, 0);
 
   return { profile, balances, recentTransfers: transfers, totalBalanceHKD };
+}
+
+// ===== Sync & Cache =====
+
+export async function syncWiseData(): Promise<{
+  profiles: number;
+  transfers: number;
+  recipients: number;
+  balances: number;
+}> {
+  const profiles = await getProfiles();
+  setWiseCache("profiles", profiles);
+
+  const business = profiles.find(p => p.type === "business");
+  const personal = profiles.find(p => p.type === "personal");
+
+  let totalTransfers = 0;
+  let totalRecipients = 0;
+  let totalBalances = 0;
+
+  if (business) {
+    const [balances, borderless, transfers, recipients] = await Promise.all([
+      getBalances(business.id),
+      getBorderlessAccounts(business.id),
+      getAllTransfers(business.id),
+      getRecipients(business.id),
+    ]);
+
+    // Compute stats
+    const sent = transfers.filter(t => t.status === "outgoing_payment_sent");
+    const byCurrency: Record<string, { amount: number; count: number }> = {};
+    for (const t of sent) {
+      if (!byCurrency[t.targetCurrency]) byCurrency[t.targetCurrency] = { amount: 0, count: 0 };
+      byCurrency[t.targetCurrency].amount += t.targetValue;
+      byCurrency[t.targetCurrency].count++;
+    }
+
+    setWiseCache("business_profile", business);
+    setWiseCache("business_balances", balances);
+    setWiseCache("business_borderless", borderless);
+    setWiseCache("business_transfers", transfers);
+    setWiseCache("business_transfer_stats", {
+      total: transfers.length,
+      sent: sent.length,
+      cancelled: transfers.filter(t => t.status === "cancelled").length,
+      refunded: transfers.filter(t => t.status === "funds_refunded").length,
+      byTargetCurrency: byCurrency,
+    });
+    setWiseCache("business_recipients", recipients);
+
+    totalTransfers += transfers.length;
+    totalRecipients += recipients.length;
+    totalBalances += balances.length;
+  }
+
+  if (personal) {
+    const [balances, transfers, recipients] = await Promise.all([
+      getBalances(personal.id).catch(() => []),
+      getAllTransfers(personal.id),
+      getRecipients(personal.id).catch(() => []),
+    ]);
+
+    setWiseCache("personal_profile", personal);
+    setWiseCache("personal_balances", balances);
+    setWiseCache("personal_transfers", transfers);
+    setWiseCache("personal_recipients", recipients);
+
+    totalTransfers += transfers.length;
+    totalRecipients += recipients.length;
+    totalBalances += balances.length;
+  }
+
+  // Get some common exchange rates
+  const ratePairs = [["HKD", "PHP"], ["HKD", "MYR"], ["HKD", "IDR"], ["HKD", "SGD"], ["HKD", "USD"], ["USD", "PHP"]];
+  const rates: Record<string, number> = {};
+  for (const [src, tgt] of ratePairs) {
+    try {
+      const r = await getExchangeRate(src, tgt);
+      if (r.length > 0) rates[`${src}_${tgt}`] = r[0].rate;
+    } catch { /* skip */ }
+  }
+  setWiseCache("exchange_rates", rates);
+
+  setWiseCache("last_sync", { timestamp: new Date().toISOString(), profiles: profiles.length, transfers: totalTransfers, recipients: totalRecipients, balances: totalBalances });
+
+  addActivity({ action: "sync", source: "wise", details: `Synced ${totalTransfers} transfers, ${totalRecipients} recipients, ${totalBalances} balances`, fileCount: totalTransfers });
+
+  return { profiles: profiles.length, transfers: totalTransfers, recipients: totalRecipients, balances: totalBalances };
+}
+
+export function getCachedWiseData(key: string): unknown | null {
+  const cached = getWiseCache(key);
+  return cached ? cached.data : null;
+}
+
+export function getLastWiseSync(): { timestamp: string; profiles: number; transfers: number; recipients: number; balances: number } | null {
+  const cached = getWiseCache("last_sync");
+  return cached ? cached.data as { timestamp: string; profiles: number; transfers: number; recipients: number; balances: number } : null;
 }
