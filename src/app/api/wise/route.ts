@@ -43,16 +43,82 @@ export async function GET(req: NextRequest) {
 
       case "transfers": {
         const profileId = parseInt(req.nextUrl.searchParams.get("profileId") || "0");
+        const all = req.nextUrl.searchParams.get("all") === "true";
         const limit = parseInt(req.nextUrl.searchParams.get("limit") || "20");
         const offset = parseInt(req.nextUrl.searchParams.get("offset") || "0");
-        if (!profileId) {
-          const profile = await wise.getBusinessProfile();
-          if (!profile) return NextResponse.json({ error: "No profile found" }, { status: 404 });
-          const transfers = await wise.getTransfers(profile.id, limit, offset);
-          return NextResponse.json({ transfers, count: transfers.length, profileId: profile.id });
+
+        const resolvedId = profileId || (await wise.getBusinessProfile())?.id;
+        if (!resolvedId) return NextResponse.json({ error: "No profile found" }, { status: 404 });
+
+        if (all) {
+          const transfers = await wise.getAllTransfers(resolvedId);
+          return NextResponse.json({ transfers, count: transfers.length, profileId: resolvedId });
         }
-        const transfers = await wise.getTransfers(profileId, limit, offset);
-        return NextResponse.json({ transfers, count: transfers.length, profileId });
+        const transfers = await wise.getTransfers(resolvedId, limit, offset);
+        return NextResponse.json({ transfers, count: transfers.length, profileId: resolvedId });
+      }
+
+      case "all-data": {
+        // Full dump for AI agents — all profiles, balances, transfers, recipients
+        const profiles = await wise.getProfiles();
+        const business = profiles.find(p => p.type === "business");
+        const personal = profiles.find(p => p.type === "personal");
+
+        const result: Record<string, unknown> = { profiles };
+
+        if (business) {
+          const [bBalances, bBorderless, bTransfers, bRecipients] = await Promise.all([
+            wise.getBalances(business.id),
+            wise.getBorderlessAccounts(business.id),
+            wise.getAllTransfers(business.id),
+            wise.getRecipients(business.id),
+          ]);
+
+          // Compute transfer stats
+          const sent = bTransfers.filter(t => t.status === "outgoing_payment_sent");
+          const totalSentByCurrency: Record<string, number> = {};
+          for (const t of sent) {
+            totalSentByCurrency[t.sourceCurrency] = (totalSentByCurrency[t.sourceCurrency] || 0) + t.sourceValue;
+          }
+          const byCurrency: Record<string, { sent: number; count: number }> = {};
+          for (const t of sent) {
+            if (!byCurrency[t.targetCurrency]) byCurrency[t.targetCurrency] = { sent: 0, count: 0 };
+            byCurrency[t.targetCurrency].sent += t.targetValue;
+            byCurrency[t.targetCurrency].count++;
+          }
+
+          result.business = {
+            profile: business,
+            balances: bBalances,
+            borderlessAccounts: bBorderless,
+            transfers: {
+              total: bTransfers.length,
+              sent: sent.length,
+              cancelled: bTransfers.filter(t => t.status === "cancelled").length,
+              refunded: bTransfers.filter(t => t.status === "funds_refunded").length,
+              totalSentByCurrency,
+              byTargetCurrency: byCurrency,
+              all: bTransfers,
+            },
+            recipients: bRecipients,
+          };
+        }
+
+        if (personal) {
+          const [pBalances, pTransfers, pRecipients] = await Promise.all([
+            wise.getBalances(personal.id).catch(() => []),
+            wise.getAllTransfers(personal.id),
+            wise.getRecipients(personal.id).catch(() => []),
+          ]);
+          result.personal = {
+            profile: personal,
+            balances: pBalances,
+            transfers: { total: pTransfers.length, all: pTransfers },
+            recipients: pRecipients,
+          };
+        }
+
+        return NextResponse.json(result);
       }
 
       case "recipients": {

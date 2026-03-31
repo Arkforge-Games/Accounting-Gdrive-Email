@@ -161,8 +161,22 @@ export async function getTransfers(profileId: number, limit = 20, offset = 0): P
   return wiseGet(`/v1/transfers?profile=${profileId}&limit=${limit}&offset=${offset}`);
 }
 
+export async function getAllTransfers(profileId: number): Promise<WiseTransfer[]> {
+  const all: WiseTransfer[] = [];
+  let offset = 0;
+  const PAGE = 100;
+  while (true) {
+    const page = await getTransfers(profileId, PAGE, offset);
+    all.push(...page);
+    if (page.length < PAGE) break;
+    offset += PAGE;
+  }
+  return all;
+}
+
 export async function getRecipients(profileId: number): Promise<WiseRecipient[]> {
-  return wiseGet(`/v2/accounts?profileId=${profileId}`);
+  // v1 endpoint returns full names, v2 does not
+  return wiseGet(`/v1/accounts?profileId=${profileId}`);
 }
 
 export async function getStatement(

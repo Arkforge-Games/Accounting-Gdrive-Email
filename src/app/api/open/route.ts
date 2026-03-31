@@ -124,9 +124,33 @@ export async function GET(req: NextRequest) {
             case "transfers": {
               const profile = await wise.getBusinessProfile();
               if (!profile) return NextResponse.json({ error: "No profile" }, { status: 404 });
+              const all = req.nextUrl.searchParams.get("all") === "true";
+              if (all) {
+                const transfers = await wise.getAllTransfers(profile.id);
+                return NextResponse.json({ transfers, count: transfers.length });
+              }
               const limit = parseInt(req.nextUrl.searchParams.get("limit") || "20");
-              const transfers = await wise.getTransfers(profile.id, limit);
+              const offset = parseInt(req.nextUrl.searchParams.get("offset") || "0");
+              const transfers = await wise.getTransfers(profile.id, limit, offset);
               return NextResponse.json({ transfers, count: transfers.length });
+            }
+            case "all-transfers": {
+              const profile = await wise.getBusinessProfile();
+              if (!profile) return NextResponse.json({ error: "No profile" }, { status: 404 });
+              const transfers = await wise.getAllTransfers(profile.id);
+              const sent = transfers.filter(t => t.status === "outgoing_payment_sent");
+              const byCurrency: Record<string, { amount: number; count: number }> = {};
+              for (const t of sent) {
+                if (!byCurrency[t.targetCurrency]) byCurrency[t.targetCurrency] = { amount: 0, count: 0 };
+                byCurrency[t.targetCurrency].amount += t.targetValue;
+                byCurrency[t.targetCurrency].count++;
+              }
+              return NextResponse.json({
+                transfers,
+                count: transfers.length,
+                stats: { total: transfers.length, sent: sent.length, cancelled: transfers.filter(t => t.status === "cancelled").length, refunded: transfers.filter(t => t.status === "funds_refunded").length },
+                byTargetCurrency: byCurrency,
+              });
             }
             case "recipients": {
               const profile = await wise.getBusinessProfile();
@@ -141,7 +165,7 @@ export async function GET(req: NextRequest) {
               return NextResponse.json({ rates });
             }
             default:
-              return NextResponse.json({ error: `Unknown wise sub: ${sub}`, available: ["summary", "balances", "transfers", "recipients", "rate"] });
+              return NextResponse.json({ error: `Unknown wise sub: ${sub}`, available: ["summary", "balances", "transfers", "all-transfers", "recipients", "rate"] });
           }
         } catch (err) {
           return NextResponse.json({ error: err instanceof Error ? err.message : "Wise API error" }, { status: 500 });

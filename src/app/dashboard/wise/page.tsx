@@ -137,7 +137,7 @@ export default function WisePage() {
     try {
       switch (t) {
         case "transfers": {
-          const res = await fetch("/api/wise?action=transfers&limit=50");
+          const res = await fetch("/api/wise?action=transfers&all=true");
           const data = await res.json();
           setAllTransfers(data.transfers || []);
           break;
