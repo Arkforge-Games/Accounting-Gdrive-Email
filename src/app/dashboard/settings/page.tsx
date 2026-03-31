@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { TopBar } from "@/components/TopBar";
 import { ConnectionCard } from "@/components/ConnectionCard";
 import { cx } from "@/lib/cn";
-import { IconGoogle, IconMicrosoft } from "@/components/icons";
+import { IconGoogle, IconMicrosoft, IconXero } from "@/components/icons";
 import type { ConnectionStatus } from "@/lib/types";
 
 export default function SettingsPage() {
@@ -12,6 +12,7 @@ export default function SettingsPage() {
     gdrive: { connected: false },
     outlook: { connected: false },
     gmail: { connected: false },
+    xero: { connected: false },
   });
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -60,7 +61,7 @@ export default function SettingsPage() {
         {/* Connections */}
         <section>
           <h2 className="text-lg font-semibold mb-4">Connected Accounts</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <ConnectionCard
               name="Google Drive"
               icon={<IconGoogle className="w-10 h-10" />}
@@ -80,6 +81,20 @@ export default function SettingsPage() {
               fileCount={connections.outlook?.fileCount}
               connectUrl="/api/auth/microsoft"
               color="bg-[#0078d4] hover:bg-[#006cbd]"
+            />
+            <ConnectionCard
+              name="Xero Accounting"
+              icon={
+                <div className="w-10 h-10 bg-[#13B5EA]/10 rounded-lg flex items-center justify-center">
+                  <IconXero className="w-6 h-6 text-[#13B5EA]" />
+                </div>
+              }
+              connected={connections.xero?.connected}
+              email={connections.xero?.email}
+              lastSync={connections.xero?.lastSync}
+              fileCount={connections.xero?.fileCount}
+              connectUrl="/api/auth/xero"
+              color="bg-[#13B5EA] hover:bg-[#0e9fd0]"
             />
             <ConnectionCard
               name="Gmail"

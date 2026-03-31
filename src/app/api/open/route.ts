@@ -3,6 +3,7 @@ import * as db from "@/lib/db";
 import { getTokens, getAuthenticatedClient, extractFolderId } from "@/lib/google";
 import { fetchEmailAttachments } from "@/lib/imap";
 import { CATEGORIES, STATUSES } from "@/lib/categorize";
+import * as xero from "@/lib/xero";
 
 const API_KEY = process.env.API_KEY || "";
 
@@ -102,6 +103,47 @@ export async function GET(req: NextRequest) {
         return NextResponse.json(connections);
       }
 
+      case "xero": {
+        const sub = req.nextUrl.searchParams.get("sub") || "status";
+        try {
+          switch (sub) {
+            case "status": {
+              const connected = xero.isXeroConnected();
+              const tenant = xero.getXeroTenantInfo();
+              return NextResponse.json({ connected, tenant });
+            }
+            case "summary": {
+              const summary = await xero.getXeroSummary();
+              return NextResponse.json(summary);
+            }
+            case "invoices": {
+              const page = parseInt(req.nextUrl.searchParams.get("page") || "1");
+              const data = await xero.getInvoices(page);
+              return NextResponse.json(data);
+            }
+            case "bills": {
+              const page = parseInt(req.nextUrl.searchParams.get("page") || "1");
+              const data = await xero.getInvoices(page, 'Type=="ACCPAY"');
+              return NextResponse.json({ Bills: data.Invoices, count: data.Invoices.length });
+            }
+            case "contacts": {
+              const page = parseInt(req.nextUrl.searchParams.get("page") || "1");
+              const data = await xero.getContacts(page);
+              return NextResponse.json(data);
+            }
+            case "accounts": {
+              const data = await xero.getAccounts();
+              return NextResponse.json(data);
+            }
+            default:
+              return NextResponse.json({ error: `Unknown xero sub-action: ${sub}`, available: ["status", "summary", "invoices", "bills", "contacts", "accounts"] });
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Xero API error";
+          return NextResponse.json({ error: msg }, { status: 500 });
+        }
+      }
+
       case "accounting": {
         const subAction = req.nextUrl.searchParams.get("sub") || "summary";
         if (subAction === "summary") {
@@ -132,7 +174,7 @@ export async function GET(req: NextRequest) {
       default:
         return NextResponse.json({
           error: `Unknown action: ${action}`,
-          available: ["overview", "stats", "emails", "email", "files", "search", "activity", "connections", "accounting", "sync"],
+          available: ["overview", "stats", "emails", "email", "files", "search", "activity", "connections", "accounting", "xero", "sync"],
         }, { status: 400 });
     }
   } catch (err) {

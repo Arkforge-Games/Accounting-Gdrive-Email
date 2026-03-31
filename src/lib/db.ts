@@ -125,6 +125,13 @@ function initSchema(db: Database.Database) {
       tokens TEXT NOT NULL,
       updated_at TEXT DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS xero_tokens (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      tokens TEXT NOT NULL,
+      tenant_id TEXT,
+      tenant_name TEXT,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
   `);
 
   // Seed connections if empty
@@ -134,6 +141,7 @@ function initSchema(db: Database.Database) {
     insert.run("gdrive");
     insert.run("outlook");
     insert.run("gmail");
+    insert.run("xero");
   }
 }
 
@@ -744,6 +752,34 @@ export function loadGoogleTokens(): Record<string, unknown> | null {
 
 export function clearGoogleTokens() {
   getDb().prepare("DELETE FROM google_tokens WHERE id = 1").run();
+}
+
+// ===== Xero Tokens (persistent) =====
+
+export function saveXeroTokens(tokens: Record<string, unknown>, tenantId?: string, tenantName?: string) {
+  getDb().prepare(
+    `INSERT INTO xero_tokens (id, tokens, tenant_id, tenant_name, updated_at)
+     VALUES (1, ?, ?, ?, datetime('now'))
+     ON CONFLICT(id) DO UPDATE SET
+       tokens = excluded.tokens,
+       tenant_id = COALESCE(excluded.tenant_id, xero_tokens.tenant_id),
+       tenant_name = COALESCE(excluded.tenant_name, xero_tokens.tenant_name),
+       updated_at = datetime('now')`
+  ).run(JSON.stringify(tokens), tenantId || null, tenantName || null);
+}
+
+export function loadXeroTokens(): { tokens: Record<string, unknown>; tenantId: string | null; tenantName: string | null } | null {
+  const row = getDb().prepare("SELECT tokens, tenant_id, tenant_name FROM xero_tokens WHERE id = 1").get() as {
+    tokens: string; tenant_id: string | null; tenant_name: string | null;
+  } | undefined;
+  if (!row) return null;
+  try {
+    return { tokens: JSON.parse(row.tokens), tenantId: row.tenant_id, tenantName: row.tenant_name };
+  } catch { return null; }
+}
+
+export function clearXeroTokens() {
+  getDb().prepare("DELETE FROM xero_tokens WHERE id = 1").run();
 }
 
 // ===== Helpers =====

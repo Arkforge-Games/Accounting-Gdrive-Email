@@ -146,6 +146,14 @@ export function IconMail({ className = "w-5 h-5" }: { className?: string }) {
   );
 }
 
+export function IconXero({ className = "w-5 h-5" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm-2.2 14.4L6.4 12l3.4-4.4.8.6L7.8 12l2.8 3.8-.8.6zm4.4 0l-.8-.6L16.2 12l-2.8-3.8.8-.6L17.6 12l-3.4 4.4z" />
+    </svg>
+  );
+}
+
 export function IconAccounting({ className = "w-5 h-5" }: { className?: string }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
