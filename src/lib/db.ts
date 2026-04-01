@@ -125,6 +125,22 @@ function initSchema(db: Database.Database) {
       tokens TEXT NOT NULL,
       updated_at TEXT DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS pipeline_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id TEXT NOT NULL,
+      file_id TEXT,
+      action TEXT NOT NULL,
+      status TEXT NOT NULL,
+      result TEXT,
+      error TEXT,
+      details TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_pipeline_log_run ON pipeline_log(run_id);
+    CREATE INDEX IF NOT EXISTS idx_pipeline_log_file ON pipeline_log(file_id);
+    CREATE INDEX IF NOT EXISTS idx_pipeline_log_created ON pipeline_log(created_at);
+
     CREATE TABLE IF NOT EXISTS chat_conversations (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL DEFAULT 'New Chat',
@@ -840,6 +856,60 @@ export function getWiseCacheAge(key: string): number | null {
   const row = getDb().prepare("SELECT updated_at FROM wise_cache WHERE key = ?").get(key) as { updated_at: string } | undefined;
   if (!row) return null;
   return Date.now() - new Date(row.updated_at).getTime();
+}
+
+// ===== Pipeline Log =====
+
+export function logPipeline(entry: { runId: string; fileId?: string; action: string; status: string; result?: string; error?: string; details?: string }) {
+  getDb().prepare(
+    "INSERT INTO pipeline_log (run_id, file_id, action, status, result, error, details) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  ).run(entry.runId, entry.fileId || null, entry.action, entry.status, entry.result || null, entry.error || null, entry.details || null);
+}
+
+export function getPipelineRuns(limit = 20): { runId: string; startedAt: string; actions: number; succeeded: number; failed: number; lastAction: string }[] {
+  return getDb().prepare(`
+    SELECT run_id as runId,
+      MIN(created_at) as startedAt,
+      COUNT(*) as actions,
+      SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as succeeded,
+      SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as failed,
+      MAX(action) as lastAction
+    FROM pipeline_log
+    GROUP BY run_id
+    ORDER BY MIN(created_at) DESC
+    LIMIT ?
+  `).all(limit) as { runId: string; startedAt: string; actions: number; succeeded: number; failed: number; lastAction: string }[];
+}
+
+export function getPipelineLogs(filters?: { runId?: string; fileId?: string; action?: string; limit?: number }): {
+  id: number; run_id: string; file_id: string | null; action: string; status: string; result: string | null; error: string | null; details: string | null; created_at: string;
+}[] {
+  let sql = "SELECT * FROM pipeline_log WHERE 1=1";
+  const params: (string | number)[] = [];
+  if (filters?.runId) { sql += " AND run_id = ?"; params.push(filters.runId); }
+  if (filters?.fileId) { sql += " AND file_id = ?"; params.push(filters.fileId); }
+  if (filters?.action) { sql += " AND action = ?"; params.push(filters.action); }
+  sql += " ORDER BY created_at DESC LIMIT ?";
+  params.push(filters?.limit || 100);
+  return getDb().prepare(sql).all(...params) as ReturnType<typeof getPipelineLogs>;
+}
+
+export function getFileRecordingStatus(fileId: string): string {
+  const row = getDb().prepare(
+    "SELECT status FROM pipeline_log WHERE file_id = ? AND action = 'record' ORDER BY created_at DESC LIMIT 1"
+  ).get(fileId) as { status: string } | undefined;
+  return row?.status || "pending";
+}
+
+export function getUnrecordedFiles(): IndexedFile[] {
+  // Files that have been categorized but not yet recorded to sheets
+  const recorded = getDb().prepare(
+    "SELECT DISTINCT file_id FROM pipeline_log WHERE action = 'record' AND status IN ('success', 'duplicate', 'skipped')"
+  ).all() as { file_id: string }[];
+  const recordedIds = new Set(recorded.map(r => r.file_id));
+
+  const all = getIndexedFiles({});
+  return all.filter(f => !recordedIds.has(f.id));
 }
 
 // ===== Chat Conversations =====
