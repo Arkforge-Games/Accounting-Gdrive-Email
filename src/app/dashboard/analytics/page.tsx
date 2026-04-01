@@ -10,25 +10,19 @@ import { cx } from "@/lib/cn";
 
 interface CurrencyPosition {
   currency: string;
+  source: string;
   amount: number;
   hkdEquivalent: number;
 }
 
-interface XeroComparison {
-  receivable: number;
-  payable: number;
-}
-
-interface ExchangeRate {
-  pair: string;
-  rate: number;
-}
-
 interface OverviewData {
   positions: CurrencyPosition[];
-  netHKD: number;
-  xero: XeroComparison;
-  exchangeRates: ExchangeRate[];
+  totalHKDEquivalent: number;
+  fileByCurrency: Record<string, { count: number; total: number }>;
+  rates: Record<string, number>;
+  xeroReceivable: number;
+  xeroPayable: number;
+  xeroNet: number;
 }
 
 interface SpendingCategory {
@@ -141,12 +135,12 @@ function OverviewTab({ data }: { data: OverviewData }) {
           Multi-Currency Positions
         </h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {data.positions.map((p) => (
-            <div key={p.currency} className={`${cx.card} p-5`}>
-              <p className="text-xs text-gray-400 uppercase">{p.currency}</p>
-              <p className="text-xl font-bold mt-1">{fmt(p.amount, p.currency)}</p>
+          {(data.positions || []).map((p: CurrencyPosition, i: number) => (
+            <div key={`${p.currency}-${p.source}-${i}`} className={`${cx.card} p-5`}>
+              <p className="text-xs text-gray-400 uppercase">{p.currency} — {p.source}</p>
+              <p className={`text-xl font-bold mt-1 ${p.amount < 0 ? "text-red-600" : ""}`}>{fmt(p.amount, p.currency)}</p>
               <p className="text-sm text-gray-500 mt-0.5">
-                HKD Equiv: {fmt(p.hkdEquivalent, "HKD")}
+                HKD: {fmt(p.hkdEquivalent, "HKD")}
               </p>
             </div>
           ))}
@@ -159,10 +153,10 @@ function OverviewTab({ data }: { data: OverviewData }) {
           <p className="text-xs text-gray-400 uppercase">Net Position (Total HKD)</p>
           <p
             className={`text-2xl font-bold mt-1 ${
-              data.netHKD >= 0 ? "text-green-600" : "text-red-600"
+              (data.totalHKDEquivalent || 0) >= 0 ? "text-green-600" : "text-red-600"
             }`}
           >
-            {fmt(data.netHKD, "HKD")}
+            {fmt(data.totalHKDEquivalent, "HKD")}
           </p>
         </div>
       </section>
@@ -176,13 +170,13 @@ function OverviewTab({ data }: { data: OverviewData }) {
           <div className={`${cx.card} p-5 border-l-4 border-l-green-500`}>
             <p className="text-xs text-gray-400 uppercase">Receivable</p>
             <p className="text-xl font-bold text-green-600 mt-1">
-              {fmt(data.xero.receivable)}
+              {fmt(data.xeroReceivable)}
             </p>
           </div>
           <div className={`${cx.card} p-5 border-l-4 border-l-red-500`}>
             <p className="text-xs text-gray-400 uppercase">Payable</p>
             <p className="text-xl font-bold text-red-600 mt-1">
-              {fmt(data.xero.payable)}
+              {fmt(data.xeroPayable)}
             </p>
           </div>
         </div>
@@ -202,11 +196,11 @@ function OverviewTab({ data }: { data: OverviewData }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {data.exchangeRates.map((r) => (
-                <tr key={r.pair}>
-                  <td className={cx.tableCell}>{r.pair}</td>
+              {Object.entries(data.rates || {}).map(([pair, rate]) => (
+                <tr key={pair}>
+                  <td className={cx.tableCell}>{pair.replace("_", " → ")}</td>
                   <td className={`${cx.tableCell} text-right font-mono`}>
-                    {r.rate.toFixed(4)}
+                    {Number(rate).toFixed(4)}
                   </td>
                 </tr>
               ))}
