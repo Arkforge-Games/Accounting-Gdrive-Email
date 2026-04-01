@@ -156,9 +156,10 @@ export async function POST(req: NextRequest) {
   // Save user message
   db.addChatMessage(convId, "user", message);
 
-  // Get conversation history
+  // Get conversation history (limit to last 10 messages to keep context small)
   const history = db.getChatMessages(convId);
-  const messages = history.map(m => ({ role: m.role, content: m.content }));
+  const recent = history.slice(-10);
+  const messages = recent.map(m => ({ role: m.role, content: m.content }));
 
   // Auto-title on first message
   if (history.length <= 1) {

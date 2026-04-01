@@ -18,6 +18,28 @@ interface Message {
   content: string;
 }
 
+function renderMarkdown(text: string): string {
+  return text
+    // Code blocks
+    .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre class="bg-gray-100 rounded-lg p-3 text-xs font-mono overflow-x-auto my-2">$2</pre>')
+    // Inline code
+    .replace(/`([^`]+)`/g, '<code class="bg-gray-100 px-1.5 py-0.5 rounded text-xs font-mono">$1</code>')
+    // Bold
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    // Italic
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    // Headers
+    .replace(/^### (.+)$/gm, '<h3 class="font-bold text-base mt-3 mb-1">$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2 class="font-bold text-lg mt-3 mb-1">$1</h2>')
+    // Bullet lists
+    .replace(/^[*-] (.+)$/gm, '<div class="flex gap-2 ml-1"><span class="text-gray-400 shrink-0">•</span><span>$1</span></div>')
+    // Numbered lists
+    .replace(/^(\d+)\. (.+)$/gm, '<div class="flex gap-2 ml-1"><span class="text-gray-400 shrink-0">$1.</span><span>$2</span></div>')
+    // Line breaks
+    .replace(/\n\n/g, '<div class="h-2"></div>')
+    .replace(/\n/g, '<br/>');
+}
+
 const SUGGESTIONS = [
   "How much did we spend on Cloudflare this year?",
   "List all unpaid invoices over HK$5,000",
@@ -92,6 +114,9 @@ export default function ChatPage() {
     setLoading(true);
 
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 58000);
+
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -99,8 +124,19 @@ export default function ChatPage() {
           conversationId: activeConvId,
           message: msg,
         }),
+        signal: controller.signal,
       });
-      const data = await res.json();
+      clearTimeout(timeout);
+
+      const text = await res.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        setMessages([...newMessages, { role: "assistant", content: "The AI took too long to respond. Please try a shorter question or start a new chat." }]);
+        setLoading(false);
+        return;
+      }
 
       if (data.conversationId && !activeConvId) {
         setActiveConvId(data.conversationId);
@@ -114,7 +150,10 @@ export default function ChatPage() {
 
       fetchConversations();
     } catch (err) {
-      setMessages([...newMessages, { role: "assistant", content: `Error: ${err instanceof Error ? err.message : "Failed to connect"}` }]);
+      const msg2 = err instanceof Error && err.name === "AbortError"
+        ? "Request timed out. Try a shorter question or start a new chat."
+        : `Error: ${err instanceof Error ? err.message : "Failed to connect"}`;
+      setMessages([...newMessages, { role: "assistant", content: msg2 }]);
     }
 
     setLoading(false);
@@ -239,9 +278,7 @@ export default function ChatPage() {
                         : "bg-white border border-gray-200 text-gray-800"
                     }`}>
                       {msg.role === "assistant" ? (
-                        <div className="text-sm leading-relaxed whitespace-pre-wrap">
-                          {msg.content}
-                        </div>
+                        <div className="text-sm leading-relaxed space-y-2" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
                       ) : (
                         <p className="text-sm">{msg.content}</p>
                       )}
