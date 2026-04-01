@@ -2,7 +2,7 @@ import type { SyncFile } from "./types";
 import type { CategoryKey } from "./categorize";
 
 const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY || "";
-const MODEL = "google/gemini-2.5-flash-preview-05-20";
+const MODEL = "google/gemini-2.5-flash";
 
 interface AICategorizeResult {
   category: CategoryKey;
