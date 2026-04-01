@@ -44,10 +44,10 @@ Gmail: ${stats.gmailFiles} | Drive: ${stats.gdriveFiles} | Emails: ${emailCount}
   for (const [category, data] of Object.entries(filesByCategory)) {
     if (category === "junk") continue;
     ctx += `\n[${category}]\n`;
-    for (const f of data.files.slice(0, 25)) {
-      ctx += `${f.name} | ${f.vendor || "?"} | ${f.amount ? `${f.currency} ${f.amount}` : "-"} | ${f.date?.substring(0, 10)} | ${f.notes || ""}\n`;
+    for (const f of data.files.slice(0, 15)) {
+      ctx += `${f.name} | ${f.vendor || "?"} | ${f.amount ? `${f.currency} ${f.amount}` : "-"} | ${f.date?.substring(0, 10)}\n`;
     }
-    if (data.files.length > 25) ctx += `... +${data.files.length - 25} more\n`;
+    if (data.files.length > 15) ctx += `... +${data.files.length - 15} more\n`;
   }
 
   if (xeroStats?.data) {
@@ -62,7 +62,7 @@ Status: ${JSON.stringify(xs.invoicesByStatus)} / Bills: ${JSON.stringify(xs.bill
   if (xeroInvoices?.data) {
     const invs = xeroInvoices.data as { InvoiceNumber: string; Contact: { Name: string }; Total: number; AmountDue: number; Status: string; DateString: string; DueDateString: string; CurrencyCode: string }[];
     ctx += `\nInvoices (${invs.length}):\n`;
-    for (const inv of invs.slice(0, 40))
+    for (const inv of invs.slice(0, 25))
       ctx += `${inv.InvoiceNumber} | ${inv.Contact?.Name} | ${inv.CurrencyCode} ${inv.Total} | Due: ${inv.AmountDue} | ${inv.Status} | ${inv.DateString?.substring(0, 10)}\n`;
   }
 
@@ -135,7 +135,13 @@ export async function POST(req: NextRequest) {
   // Send message (default action)
   if (!OPENROUTER_KEY) return NextResponse.json({ error: "AI not configured" }, { status: 500 });
 
-  const { conversationId, message } = body;
+  const { conversationId } = body;
+  // Support both new format (message: string) and old format (messages: array)
+  let message = body.message as string | undefined;
+  if (!message && body.messages && Array.isArray(body.messages)) {
+    const lastUser = [...body.messages].reverse().find((m: { role: string }) => m.role === "user");
+    message = lastUser?.content;
+  }
   if (!message) return NextResponse.json({ error: "Missing message" }, { status: 400 });
 
   // Ensure conversation exists
@@ -164,6 +170,9 @@ export async function POST(req: NextRequest) {
   const systemContext = buildSystemContext();
 
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 55000); // 55s timeout
+
     const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -174,9 +183,11 @@ export async function POST(req: NextRequest) {
         model: MODEL,
         messages: [{ role: "system", content: systemContext }, ...messages],
         temperature: 0.3,
-        max_tokens: 1500,
+        max_tokens: 1000,
       }),
+      signal: controller.signal,
     });
+    clearTimeout(timeout);
 
     if (!res.ok) {
       const err = await res.text();
