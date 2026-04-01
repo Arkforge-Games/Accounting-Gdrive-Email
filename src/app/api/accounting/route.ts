@@ -2,16 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import * as db from "@/lib/db";
 import { categorizeFile, extractAmountFromBody, CATEGORIES, STATUSES } from "@/lib/categorize";
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const pdfParse = require("pdf-parse");
+
 async function extractAmountFromPdf(fileId: string): Promise<{ amount: string; currency: string } | null> {
   try {
     const fileData = db.getFileContent(fileId);
     if (!fileData || !fileData.mimeType.includes("pdf")) return null;
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const pdfParse = require("pdf-parse");
     const result = await pdfParse(Buffer.from(fileData.content));
     if (!result.text) return null;
     return extractAmountFromBody(result.text);
-  } catch {
+  } catch (err) {
+    console.error(`[PDF Extract] ${fileId}:`, err instanceof Error ? err.message : err);
     return null;
   }
 }
