@@ -125,6 +125,24 @@ function initSchema(db: Database.Database) {
       tokens TEXT NOT NULL,
       updated_at TEXT DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS chat_conversations (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL DEFAULT 'New Chat',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversation_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      model TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_conv ON chat_messages(conversation_id);
+
     CREATE TABLE IF NOT EXISTS data_cache (
       key TEXT PRIMARY KEY,
       source TEXT NOT NULL,
@@ -822,6 +840,69 @@ export function getWiseCacheAge(key: string): number | null {
   const row = getDb().prepare("SELECT updated_at FROM wise_cache WHERE key = ?").get(key) as { updated_at: string } | undefined;
   if (!row) return null;
   return Date.now() - new Date(row.updated_at).getTime();
+}
+
+// ===== Chat Conversations =====
+
+export interface ChatConversation {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  message_count?: number;
+  last_message?: string;
+}
+
+export interface ChatMessage {
+  id: number;
+  conversation_id: string;
+  role: string;
+  content: string;
+  model: string | null;
+  created_at: string;
+}
+
+export function createConversation(id: string, title?: string): ChatConversation {
+  getDb().prepare(
+    "INSERT INTO chat_conversations (id, title) VALUES (?, ?)"
+  ).run(id, title || "New Chat");
+  return getDb().prepare("SELECT * FROM chat_conversations WHERE id = ?").get(id) as ChatConversation;
+}
+
+export function getConversations(limit = 50): ChatConversation[] {
+  return getDb().prepare(`
+    SELECT c.*,
+      (SELECT COUNT(*) FROM chat_messages m WHERE m.conversation_id = c.id) as message_count,
+      (SELECT m.content FROM chat_messages m WHERE m.conversation_id = c.id ORDER BY m.id DESC LIMIT 1) as last_message
+    FROM chat_conversations c
+    ORDER BY c.updated_at DESC
+    LIMIT ?
+  `).all(limit) as ChatConversation[];
+}
+
+export function getConversation(id: string): ChatConversation | undefined {
+  return getDb().prepare("SELECT * FROM chat_conversations WHERE id = ?").get(id) as ChatConversation | undefined;
+}
+
+export function updateConversationTitle(id: string, title: string) {
+  getDb().prepare("UPDATE chat_conversations SET title = ?, updated_at = datetime('now') WHERE id = ?").run(title, id);
+}
+
+export function deleteConversation(id: string) {
+  getDb().prepare("DELETE FROM chat_conversations WHERE id = ?").run(id);
+}
+
+export function addChatMessage(conversationId: string, role: string, content: string, model?: string) {
+  getDb().prepare(
+    "INSERT INTO chat_messages (conversation_id, role, content, model) VALUES (?, ?, ?, ?)"
+  ).run(conversationId, role, content, model || null);
+  getDb().prepare("UPDATE chat_conversations SET updated_at = datetime('now') WHERE id = ?").run(conversationId);
+}
+
+export function getChatMessages(conversationId: string): ChatMessage[] {
+  return getDb().prepare(
+    "SELECT * FROM chat_messages WHERE conversation_id = ? ORDER BY id ASC"
+  ).all(conversationId) as ChatMessage[];
 }
 
 // ===== Generic Data Cache (Xero, etc.) =====
