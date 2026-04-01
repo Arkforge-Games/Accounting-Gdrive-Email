@@ -2,6 +2,7 @@ import * as db from "./db";
 import { categorizeFile, extractAmountFromBody } from "./categorize";
 import { isAIConfigured, aiCategorizeFile } from "./ai-categorize";
 import { appendPayableRow, appendReceivableRow, getPayables, getReceivables } from "./sheets";
+import { isXeroConnected, createBill, createInvoice } from "./xero";
 
 const PAYABLE_CATEGORIES = new Set(["bill", "reimbursement", "receipt", "payroll"]);
 const RECEIVABLE_CATEGORIES = new Set(["invoice"]);
@@ -13,6 +14,7 @@ export interface PipelineResult {
   categorized: number;
   aiCategorized: number;
   recorded: number;
+  xeroCreated: number;
   duplicates: number;
   skipped: number;
   errors: number;
@@ -23,7 +25,7 @@ export async function runPipeline(): Promise<PipelineResult> {
   const runId = crypto.randomUUID();
   const result: PipelineResult = {
     runId, filesProcessed: 0, categorized: 0, aiCategorized: 0,
-    recorded: 0, duplicates: 0, skipped: 0, errors: 0, details: [],
+    recorded: 0, xeroCreated: 0, duplicates: 0, skipped: 0, errors: 0, details: [],
   };
 
   db.logPipeline({ runId, action: "pipeline_start", status: "success", details: "Pipeline run started" });
@@ -152,6 +154,26 @@ export async function runPipeline(): Promise<PipelineResult> {
             });
             db.logPipeline({ runId, fileId: file.id, action: "record", status: "success", result: "payable", details: `${file.vendor} ${file.currency} ${file.amount}` });
             result.recorded++;
+
+            // Auto-create Xero bill (DRAFT) for payable items with amount
+            if (isXeroConnected() && file.amount && parseFloat(file.amount) > 0) {
+              try {
+                const amt = parseFloat(file.amount);
+                const cur = mapCurrency(file.currency);
+                await createBill({
+                  contactName: file.vendor || "Unknown Supplier",
+                  date: file.date ? new Date(file.date).toISOString().split("T")[0] : new Date().toISOString().split("T")[0],
+                  description: file.notes || `${file.category}: ${file.name}`,
+                  amount: amt,
+                  currencyCode: cur,
+                  invoiceNumber: file.referenceNo || undefined,
+                });
+                db.logPipeline({ runId, fileId: file.id, action: "xero_bill", status: "success", result: "DRAFT", details: `${file.vendor} ${cur} ${amt}` });
+                result.xeroCreated++;
+              } catch (err) {
+                db.logPipeline({ runId, fileId: file.id, action: "xero_bill", status: "error", error: err instanceof Error ? err.message : "Xero write failed" });
+              }
+            }
           } else if (RECEIVABLE_CATEGORIES.has(file.category)) {
             await appendReceivableRow({
               jobDate: formatDate(file.date),
@@ -167,6 +189,26 @@ export async function runPipeline(): Promise<PipelineResult> {
             });
             db.logPipeline({ runId, fileId: file.id, action: "record", status: "success", result: "receivable", details: `${file.vendor} ${file.currency} ${file.amount}` });
             result.recorded++;
+
+            // Auto-create Xero invoice (DRAFT) for receivable items
+            if (isXeroConnected() && file.amount && parseFloat(file.amount) > 0) {
+              try {
+                const amt = parseFloat(file.amount);
+                const cur = mapCurrency(file.currency);
+                await createInvoice({
+                  contactName: file.vendor || "Unknown Client",
+                  date: file.date ? new Date(file.date).toISOString().split("T")[0] : new Date().toISOString().split("T")[0],
+                  description: file.notes || `${file.category}: ${file.name}`,
+                  amount: amt,
+                  currencyCode: cur,
+                  invoiceNumber: file.referenceNo || undefined,
+                });
+                db.logPipeline({ runId, fileId: file.id, action: "xero_invoice", status: "success", result: "DRAFT", details: `${file.vendor} ${cur} ${amt}` });
+                result.xeroCreated++;
+              } catch (err) {
+                db.logPipeline({ runId, fileId: file.id, action: "xero_invoice", status: "error", error: err instanceof Error ? err.message : "Xero write failed" });
+              }
+            }
           } else {
             db.logPipeline({ runId, fileId: file.id, action: "record", status: "skipped", details: `Unhandled category: ${file.category}` });
             result.skipped++;
@@ -186,6 +228,7 @@ export async function runPipeline(): Promise<PipelineResult> {
       `Categorized (rules): ${result.categorized}`,
       `Categorized (AI): ${result.aiCategorized}`,
       `Recorded to sheets: ${result.recorded}`,
+      `Xero created: ${result.xeroCreated}`,
       `Duplicates skipped: ${result.duplicates}`,
       `Skipped: ${result.skipped}`,
       `Errors: ${result.errors}`,
@@ -240,6 +283,20 @@ function formatDate(dateStr: string): string {
   if (!dateStr) return "";
   const d = new Date(dateStr);
   return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function mapCurrency(currency: string): string {
+  // Normalize currency codes for Xero
+  const c = (currency || "HKD").toUpperCase().trim();
+  if (c === "US$" || c === "US" || c === "$") return "USD";
+  if (c === "HK$" || c === "HK") return "HKD";
+  if (c === "₱" || c === "P") return "PHP";
+  if (c === "S$") return "SGD";
+  if (c === "RM") return "MYR";
+  if (c === "Rp") return "IDR";
+  if (c === "€") return "EUR";
+  if (c === "£") return "GBP";
+  return c;
 }
 
 function formatType(category: string): string {

@@ -252,6 +252,35 @@ export async function createBill(bill: {
   });
 }
 
+export async function createInvoice(invoice: {
+  contactName: string;
+  date: string;
+  dueDate?: string;
+  description: string;
+  amount: number;
+  currencyCode?: string;
+  invoiceNumber?: string;
+  accountCode?: string;
+}): Promise<unknown> {
+  return xeroPost("/Invoices", {
+    Type: "ACCREC",
+    Contact: { Name: invoice.contactName },
+    Date: invoice.date,
+    DueDate: invoice.dueDate || invoice.date,
+    LineItems: [
+      {
+        Description: invoice.description,
+        Quantity: 1,
+        UnitAmount: invoice.amount,
+        AccountCode: invoice.accountCode || "200",
+      },
+    ],
+    Status: "DRAFT",
+    InvoiceNumber: invoice.invoiceNumber || undefined,
+    CurrencyCode: invoice.currencyCode || "HKD",
+  });
+}
+
 // ===== Public API =====
 
 export function isXeroConnected(): boolean {
