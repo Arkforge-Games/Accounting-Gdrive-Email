@@ -106,7 +106,7 @@ export default function ExpensesPage() {
               <IconSync className={`w-4 h-4 ${syncing ? "animate-spin" : ""}`} />
               {syncing ? "Syncing..." : "Sync Sheet"}
             </button>
-            <a href={`https://docs.google.com/spreadsheets/d/${process.env.NEXT_PUBLIC_SHEET_ID || "1YTTr1t_a4ADQiDnfGGz20W1qqygqKDfvq9B4wPTxIpQ"}/edit`}
+            <a href={`https://docs.google.com/spreadsheets/d/${process.env.NEXT_PUBLIC_SHEET_ID || "1gCGR0fEruEdwVNe2qx9U2hAb7cIqjWcMHVae_iH_MsE"}/edit`}
               target="_blank" className={cx.btnPrimary}>
               Open in Google Sheets
             </a>

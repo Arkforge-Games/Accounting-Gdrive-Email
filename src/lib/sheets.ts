@@ -2,7 +2,7 @@ import { google } from "googleapis";
 import { getAuthenticatedClient } from "./google";
 import { setDataCache, getDataCache } from "./db";
 
-const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID || "1YTTr1t_a4ADQiDnfGGz20W1qqygqKDfvq9B4wPTxIpQ";
+const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID || "1gCGR0fEruEdwVNe2qx9U2hAb7cIqjWcMHVae_iH_MsE";
 
 function getSheets() {
   const auth = getAuthenticatedClient();
