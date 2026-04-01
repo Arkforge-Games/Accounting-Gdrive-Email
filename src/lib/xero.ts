@@ -345,6 +345,51 @@ export async function getOrganisation(): Promise<{ Organisations: { Name: string
   return xeroGet("/Organisation");
 }
 
+// ===== Reports =====
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function getReport(reportName: string, params?: Record<string, string>): Promise<any> {
+  return xeroGet(`/Reports/${reportName}`, params);
+}
+
+export async function getProfitAndLoss(fromDate?: string, toDate?: string) {
+  const params: Record<string, string> = {};
+  if (fromDate) params.fromDate = fromDate;
+  if (toDate) params.toDate = toDate;
+  return getReport("ProfitAndLoss", params);
+}
+
+export async function getBalanceSheet(date?: string) {
+  const params: Record<string, string> = {};
+  if (date) params.date = date;
+  return getReport("BalanceSheet", params);
+}
+
+export async function getBankSummary(fromDate?: string, toDate?: string) {
+  const params: Record<string, string> = {};
+  if (fromDate) params.fromDate = fromDate;
+  if (toDate) params.toDate = toDate;
+  return getReport("BankSummary", params);
+}
+
+export async function getAgedReceivables(date?: string) {
+  const params: Record<string, string> = {};
+  if (date) params.date = date;
+  return getReport("AgedReceivablesByContact", params);
+}
+
+export async function getAgedPayables(date?: string) {
+  const params: Record<string, string> = {};
+  if (date) params.date = date;
+  return getReport("AgedPayablesByContact", params);
+}
+
+export async function getTrialBalance(date?: string) {
+  const params: Record<string, string> = {};
+  if (date) params.date = date;
+  return getReport("TrialBalance", params);
+}
+
 // Summary helper — gets a quick overview of the Xero org
 export async function getXeroSummary(): Promise<{
   organisation: string;

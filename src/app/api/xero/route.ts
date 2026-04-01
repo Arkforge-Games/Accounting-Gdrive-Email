@@ -54,6 +54,51 @@ export async function GET(req: NextRequest) {
         return NextResponse.json(data);
       }
 
+      case "profit-loss": {
+        const from = req.nextUrl.searchParams.get("from") || undefined;
+        const to = req.nextUrl.searchParams.get("to") || undefined;
+        const data = await xero.getProfitAndLoss(from, to);
+        return NextResponse.json(data);
+      }
+
+      case "balance-sheet": {
+        const date = req.nextUrl.searchParams.get("date") || undefined;
+        const data = await xero.getBalanceSheet(date);
+        return NextResponse.json(data);
+      }
+
+      case "bank-summary": {
+        const from = req.nextUrl.searchParams.get("from") || undefined;
+        const to = req.nextUrl.searchParams.get("to") || undefined;
+        const data = await xero.getBankSummary(from, to);
+        return NextResponse.json(data);
+      }
+
+      case "aged-receivables": {
+        const date = req.nextUrl.searchParams.get("date") || undefined;
+        const data = await xero.getAgedReceivables(date);
+        return NextResponse.json(data);
+      }
+
+      case "aged-payables": {
+        const date = req.nextUrl.searchParams.get("date") || undefined;
+        const data = await xero.getAgedPayables(date);
+        return NextResponse.json(data);
+      }
+
+      case "trial-balance": {
+        const date = req.nextUrl.searchParams.get("date") || undefined;
+        const data = await xero.getTrialBalance(date);
+        return NextResponse.json(data);
+      }
+
+      case "report": {
+        const name = req.nextUrl.searchParams.get("name");
+        if (!name) return NextResponse.json({ error: "Missing report name" }, { status: 400 });
+        const data = await xero.getReport(name);
+        return NextResponse.json(data);
+      }
+
       case "sync": {
         const result = await xero.syncXeroData();
         return NextResponse.json({ message: "Xero data synced and cached", ...result });
