@@ -91,10 +91,13 @@ export async function POST(req: NextRequest) {
         category: result.category,
         period: result.period,
         vendor: result.vendor || undefined,
-        amount,
-        currency,
         autoCategorized: true,
       });
+
+      // Set amount separately if extracted (bypasses COALESCE null-preservation)
+      if (amount) {
+        db.updateFileIndex(file.id, { amount, currency });
+      }
       categorized++;
     }
 
