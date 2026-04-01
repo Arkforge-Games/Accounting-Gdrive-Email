@@ -6,22 +6,21 @@ import { cx } from "@/lib/cn";
 
 /* ---------- Types ---------- */
 interface PipelineRun {
-  id: string;
-  run_date: string;
-  actions_count: number;
+  runId: string;
+  startedAt: string;
+  actions: number;
   succeeded: number;
   failed: number;
-  last_action: string;
+  lastAction: string;
 }
 
 interface PipelineLog {
-  id: string;
+  id: number;
   run_id: string;
-  timestamp: string;
-  file_name?: string;
+  created_at: string;
   file_id?: string;
   action: string;
-  status: "success" | "error" | "duplicate" | "skipped";
+  status: string;
   result?: string;
   error?: string;
   details?: string;
@@ -107,9 +106,9 @@ export default function MonitorPage() {
       const list: PipelineRun[] = data.runs ?? data ?? [];
       setRuns(list);
       if (list.length > 0) {
-        setLastRunTime(list[0].run_date);
+        setLastRunTime(list[0].startedAt + "Z");
         setLastRunResults(
-          `${list[0].succeeded} ok / ${list[0].failed} failed of ${list[0].actions_count}`
+          `${list[0].succeeded} ok / ${list[0].failed} failed of ${list[0].actions}`
         );
       }
     } catch {
@@ -177,7 +176,7 @@ export default function MonitorPage() {
     if (logSearch.trim()) {
       const q = logSearch.toLowerCase();
       return (
-        (log.file_name ?? "").toLowerCase().includes(q) ||
+        (log.file_id ?? "").toLowerCase().includes(q) ||
         (log.action ?? "").toLowerCase().includes(q) ||
         (log.result ?? "").toLowerCase().includes(q) ||
         (log.error ?? "").toLowerCase().includes(q) ||
@@ -271,20 +270,20 @@ export default function MonitorPage() {
                 <tbody className="divide-y divide-gray-50">
                   {runs.map((run) => (
                     <tr
-                      key={run.id}
+                      key={run.runId}
                       onClick={() =>
                         setSelectedRunId(
-                          selectedRunId === run.id ? null : run.id
+                          selectedRunId === run.runId ? null : run.runId
                         )
                       }
                       className={`cursor-pointer transition-colors hover:bg-gray-50 ${
-                        selectedRunId === run.id ? "bg-purple-50" : ""
+                        selectedRunId === run.runId ? "bg-purple-50" : ""
                       }`}
                     >
                       <td className={cx.tableCell}>
-                        {new Date(run.run_date).toLocaleString()}
+                        {new Date(run.startedAt + "Z").toLocaleString()}
                       </td>
-                      <td className={cx.tableCell}>{run.actions_count}</td>
+                      <td className={cx.tableCell}>{run.actions}</td>
                       <td className={cx.tableCell}>
                         <span className="text-green-600 font-medium">
                           {run.succeeded}
@@ -301,7 +300,7 @@ export default function MonitorPage() {
                           {run.failed}
                         </span>
                       </td>
-                      <td className={cx.tableCell}>{run.last_action}</td>
+                      <td className={cx.tableCell}>{run.lastAction}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -371,12 +370,12 @@ export default function MonitorPage() {
                   {filteredLogs.map((log) => (
                     <tr key={log.id} className="hover:bg-gray-50 transition-colors">
                       <td className={`${cx.tableCell} whitespace-nowrap`}>
-                        {new Date(log.timestamp).toLocaleString()}
+                        {new Date(log.created_at + "Z").toLocaleString()}
                       </td>
                       <td className={`${cx.tableCell} max-w-[200px] truncate`}>
                         {log.file_id ? (
                           <span title={log.file_id}>
-                            {log.file_name ?? log.file_id}
+                            {log.file_id ?? log.file_id}
                           </span>
                         ) : (
                           <span className="text-gray-300">-</span>
