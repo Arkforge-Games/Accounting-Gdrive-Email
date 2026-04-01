@@ -240,6 +240,13 @@ export function getEmailCount(): number {
   return (getDb().prepare("SELECT COUNT(*) as c FROM emails").get() as { c: number }).c;
 }
 
+export function getEmailBodyForFile(fileId: string): string | null {
+  const row = getDb().prepare(
+    "SELECT e.body_text FROM emails e JOIN files f ON f.email_id = e.id WHERE f.id = ?"
+  ).get(fileId) as { body_text: string | null } | undefined;
+  return row?.body_text || null;
+}
+
 export function searchEmails(query: string): DbEmail[] {
   const q = `%${query}%`;
   return getDb()

@@ -285,6 +285,79 @@ export function categorizeFile(file: SyncFile): {
   return { category: bestCategory, vendor, period, confidence };
 }
 
+// ===== Amount Extraction from Email Body =====
+
+const AMOUNT_PATTERNS: { pattern: RegExp; currency: string }[] = [
+  // USD patterns: $4.00, $1,234.56, US$100.00, USD 100.00
+  { pattern: /(?:US?\$|USD)\s*([\d,]+\.?\d{0,2})/gi, currency: "USD" },
+  // HKD patterns: HK$3,480.00, HKD 100
+  { pattern: /(?:HK\$|HKD)\s*([\d,]+\.?\d{0,2})/gi, currency: "HKD" },
+  // PHP patterns: ₱100, PHP 100, P100.00
+  { pattern: /(?:₱|PHP)\s*([\d,]+\.?\d{0,2})/gi, currency: "PHP" },
+  // SGD patterns: S$100, SGD 100
+  { pattern: /(?:S\$|SGD)\s*([\d,]+\.?\d{0,2})/gi, currency: "SGD" },
+  // EUR patterns: €100, EUR 100
+  { pattern: /(?:€|EUR)\s*([\d,]+\.?\d{0,2})/gi, currency: "EUR" },
+  // GBP patterns: £100, GBP 100
+  { pattern: /(?:£|GBP)\s*([\d,]+\.?\d{0,2})/gi, currency: "GBP" },
+  // MYR patterns: RM100, MYR 100
+  { pattern: /(?:RM|MYR)\s*([\d,]+\.?\d{0,2})/gi, currency: "MYR" },
+  // IDR patterns: Rp100,000, IDR 100000
+  { pattern: /(?:Rp|IDR)\s*([\d,]+\.?\d{0,2})/gi, currency: "IDR" },
+];
+
+// Look for "Total:" lines which are the most reliable
+const TOTAL_PATTERN = /total[:\s]*(?:US?\$|HK\$|₱|S\$|€|£|RM|Rp|PHP|USD|HKD|SGD|EUR|GBP|MYR|IDR)?\s*([\d,]+\.?\d{0,2})\s*(?:USD|HKD|PHP|SGD|EUR|GBP|MYR|IDR)?/gi;
+
+export function extractAmountFromBody(bodyText: string): { amount: string; currency: string } | null {
+  if (!bodyText) return null;
+
+  // 1. First try to find "Total:" lines — most reliable
+  const totalMatches = [...bodyText.matchAll(TOTAL_PATTERN)];
+  if (totalMatches.length > 0) {
+    // Use the last "Total:" match (usually the grand total)
+    const last = totalMatches[totalMatches.length - 1];
+    const amountStr = last[1].replace(/,/g, "");
+    const amount = parseFloat(amountStr);
+    if (amount > 0 && amount < 10000000) {
+      // Detect currency from the same line
+      const line = last[0];
+      let currency = "USD"; // default
+      if (/HK\$|HKD/i.test(line)) currency = "HKD";
+      else if (/₱|PHP/i.test(line)) currency = "PHP";
+      else if (/S\$|SGD/i.test(line)) currency = "SGD";
+      else if (/€|EUR/i.test(line)) currency = "EUR";
+      else if (/£|GBP/i.test(line)) currency = "GBP";
+      else if (/RM|MYR/i.test(line)) currency = "MYR";
+      else if (/Rp|IDR/i.test(line)) currency = "IDR";
+      else if (/US?\$|USD/i.test(line)) currency = "USD";
+      return { amount: amount.toFixed(2), currency };
+    }
+  }
+
+  // 2. Try explicit currency patterns — collect all, pick the largest (likely the total)
+  let bestAmount = 0;
+  let bestCurrency = "";
+
+  for (const { pattern, currency } of AMOUNT_PATTERNS) {
+    pattern.lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(bodyText)) !== null) {
+      const val = parseFloat(match[1].replace(/,/g, ""));
+      if (val > bestAmount && val < 10000000) {
+        bestAmount = val;
+        bestCurrency = currency;
+      }
+    }
+  }
+
+  if (bestAmount > 0) {
+    return { amount: bestAmount.toFixed(2), currency: bestCurrency };
+  }
+
+  return null;
+}
+
 export function categorizeFiles(files: SyncFile[]): {
   fileId: string;
   category: CategoryKey;

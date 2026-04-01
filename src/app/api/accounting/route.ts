@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as db from "@/lib/db";
-import { categorizeFile, CATEGORIES, STATUSES } from "@/lib/categorize";
+import { categorizeFile, extractAmountFromBody, CATEGORIES, STATUSES } from "@/lib/categorize";
 
 // GET /api/accounting — get indexed files with filters + summary
 export async function GET(req: NextRequest) {
@@ -48,11 +48,28 @@ export async function POST(req: NextRequest) {
       if (existing && !existing.auto_categorized && existing.category !== "uncategorized") continue;
 
       const result = categorizeFile(file);
+
+      // Try to extract amount from linked email body
+      let amount: string | undefined;
+      let currency: string | undefined;
+      if (result.category !== "junk") {
+        const emailBody = db.getEmailBodyForFile(file.id);
+        if (emailBody) {
+          const extracted = extractAmountFromBody(emailBody);
+          if (extracted) {
+            amount = extracted.amount;
+            currency = extracted.currency;
+          }
+        }
+      }
+
       db.upsertFileIndex({
         fileId: file.id,
         category: result.category,
         period: result.period,
         vendor: result.vendor || undefined,
+        amount,
+        currency,
         autoCategorized: true,
       });
       categorized++;
