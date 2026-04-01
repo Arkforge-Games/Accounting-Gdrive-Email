@@ -40,6 +40,7 @@ const categoryColors: Record<string, string> = {
   reimbursement: "bg-pink-100 text-pink-700 border-pink-200",
   permit: "bg-amber-100 text-amber-700 border-amber-200",
   quotation: "bg-teal-100 text-teal-700 border-teal-200",
+  junk: "bg-slate-100 text-slate-500 border-slate-200",
   uncategorized: "bg-gray-100 text-gray-600 border-gray-200",
 };
 
@@ -61,6 +62,7 @@ const categoryIcons: Record<string, string> = {
   reimbursement: "REIMB",
   permit: "PER",
   quotation: "QUO",
+  junk: "JUNK",
   uncategorized: "?",
 };
 
@@ -350,6 +352,7 @@ export default function AccountingIndexPage() {
               <option value="reimbursement">Reimbursement</option>
               <option value="quotation">Quotation</option>
               <option value="permit">Permit / License</option>
+              <option value="junk">Junk / System</option>
               <option value="uncategorized">Uncategorized</option>
             </select>
             <select

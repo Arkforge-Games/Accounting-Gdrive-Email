@@ -12,10 +12,12 @@ export async function GET(
     return NextResponse.json({ error: "File not found or no content" }, { status: 404 });
   }
 
+  const inline = req.nextUrl.searchParams.get("inline") === "1";
+
   return new NextResponse(new Uint8Array(file.content), {
     headers: {
       "Content-Type": file.mimeType,
-      "Content-Disposition": `attachment; filename="${file.name.replace(/"/g, '\\"')}"`,
+      "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${file.name.replace(/"/g, '\\"')}"`,
       "Content-Length": String(file.content.length),
     },
   });

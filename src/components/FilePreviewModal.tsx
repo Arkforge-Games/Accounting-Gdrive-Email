@@ -54,10 +54,10 @@ export function FilePreviewModal({
 
         {/* Preview Area */}
         <div className="flex-1 overflow-auto p-6">
-          {isImage && file.previewUrl ? (
-            <img src={file.previewUrl} alt={file.name} className="max-w-full rounded-lg shadow" />
-          ) : isPdf && file.previewUrl ? (
-            <iframe src={file.previewUrl} className="w-full h-96 rounded-lg border" />
+          {isImage && file.downloadUrl ? (
+            <img src={`${file.downloadUrl}?inline=1`} alt={file.name} className="max-w-full rounded-lg shadow mx-auto" />
+          ) : isPdf && file.downloadUrl ? (
+            <iframe src={`${file.downloadUrl}?inline=1`} className="w-full h-[500px] rounded-lg border" />
           ) : (
             <div className="flex items-center justify-center h-48 bg-gray-50 rounded-lg text-gray-400">
               <div className="text-center">
