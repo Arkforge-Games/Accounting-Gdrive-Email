@@ -205,6 +205,53 @@ async function xeroGet<T>(endpoint: string, params?: Record<string, string>): Pr
   return res.json();
 }
 
+async function xeroPost<T>(endpoint: string, body: unknown): Promise<T> {
+  const { accessToken, tenantId } = await getValidToken();
+  const res = await fetch(`${API_BASE}${endpoint}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "xero-tenant-id": tenantId,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Xero API error: ${res.status} ${err}`);
+  }
+  return res.json();
+}
+
+export async function createBill(bill: {
+  contactName: string;
+  date: string;
+  dueDate?: string;
+  description: string;
+  amount: number;
+  currencyCode?: string;
+  invoiceNumber?: string;
+  accountCode?: string;
+}): Promise<unknown> {
+  return xeroPost("/Invoices", {
+    Type: "ACCPAY",
+    Contact: { Name: bill.contactName },
+    Date: bill.date,
+    DueDate: bill.dueDate || bill.date,
+    LineItems: [
+      {
+        Description: bill.description,
+        Quantity: 1,
+        UnitAmount: bill.amount,
+        AccountCode: bill.accountCode || "200",
+      },
+    ],
+    Status: "DRAFT",
+    InvoiceNumber: bill.invoiceNumber || undefined,
+    CurrencyCode: bill.currencyCode || "HKD",
+  });
+}
+
 // ===== Public API =====
 
 export function isXeroConnected(): boolean {

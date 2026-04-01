@@ -2,7 +2,7 @@ export interface SyncFile {
   id: string;
   name: string;
   mimeType: string;
-  source: "gdrive" | "email-outlook" | "email-gmail";
+  source: "gdrive" | "email-outlook" | "email-gmail" | "upload";
   date: string;
   size?: string;
   sizeBytes?: number;
