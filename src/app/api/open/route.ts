@@ -228,6 +228,28 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ files, count: files.length });
       }
 
+      case "analytics": {
+        const sub = req.nextUrl.searchParams.get("sub") || "overview";
+        const analyticsUrl = `http://localhost:8325/api/analytics?action=${sub}`;
+        const analyticsRes = await fetch(analyticsUrl);
+        const analyticsData = await analyticsRes.json();
+        return NextResponse.json(analyticsData);
+      }
+
+      case "sheets": {
+        const sub = req.nextUrl.searchParams.get("sub") || "all";
+        const sheetsUrl = `http://localhost:8325/api/sheets?action=${sub}`;
+        const sheetsRes = await fetch(sheetsUrl);
+        const sheetsData = await sheetsRes.json();
+        return NextResponse.json(sheetsData);
+      }
+
+      case "alerts": {
+        const alertsRes = await fetch("http://localhost:8325/api/alerts");
+        const alertsData = await alertsRes.json();
+        return NextResponse.json(alertsData);
+      }
+
       case "sync": {
         const source = req.nextUrl.searchParams.get("source") || "all";
         // Trigger sync in background by calling the sync API internally
@@ -243,7 +265,7 @@ export async function GET(req: NextRequest) {
       default:
         return NextResponse.json({
           error: `Unknown action: ${action}`,
-          available: ["overview", "stats", "emails", "email", "files", "search", "activity", "connections", "accounting", "wise", "xero", "sync"],
+          available: ["overview", "stats", "emails", "email", "files", "search", "activity", "connections", "accounting", "wise", "xero", "analytics", "sheets", "alerts", "sync"],
         }, { status: 400 });
     }
   } catch (err) {
