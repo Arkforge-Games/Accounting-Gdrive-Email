@@ -54,8 +54,47 @@ export async function GET(req: NextRequest) {
         return NextResponse.json(data);
       }
 
+      case "sync": {
+        const result = await xero.syncXeroData();
+        return NextResponse.json({ message: "Xero data synced and cached", ...result });
+      }
+
+      case "cached": {
+        const key = req.nextUrl.searchParams.get("key") || "stats";
+        const data = xero.getCachedXeroData(key);
+        if (!data) return NextResponse.json({
+          error: `No cached data for key: ${key}`,
+          available: ["last_sync", "stats", "organisation", "invoices", "bills", "contacts", "bank_transactions", "accounts"],
+        }, { status: 404 });
+        return NextResponse.json({ key, data });
+      }
+
+      case "all-data": {
+        // Try cached first, fall back to live
+        const stats = xero.getCachedXeroData("stats");
+        const invoices = xero.getCachedXeroData("invoices");
+        const bills = xero.getCachedXeroData("bills");
+        const contacts = xero.getCachedXeroData("contacts");
+        const bankTx = xero.getCachedXeroData("bank_transactions");
+        const accounts = xero.getCachedXeroData("accounts");
+        const lastSync = xero.getLastXeroSync();
+
+        if (!stats) {
+          // No cache — do a live sync
+          const result = await xero.syncXeroData();
+          return NextResponse.json({
+            message: "First sync completed",
+            ...result,
+            stats: xero.getCachedXeroData("stats"),
+            lastSync: xero.getLastXeroSync(),
+          });
+        }
+
+        return NextResponse.json({ stats, invoices, bills, contacts, bankTransactions: bankTx, accounts, lastSync });
+      }
+
       default:
-        return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });
+        return NextResponse.json({ error: `Unknown action: ${action}`, available: ["status", "summary", "invoices", "bills", "contacts", "bank-transactions", "accounts", "organisation", "sync", "cached", "all-data"] }, { status: 400 });
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
@@ -65,6 +104,11 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
+
+  if (body.action === "sync") {
+    const result = await xero.syncXeroData();
+    return NextResponse.json({ message: "Xero data synced", ...result });
+  }
 
   if (body.action === "disconnect") {
     xero.disconnectXero();

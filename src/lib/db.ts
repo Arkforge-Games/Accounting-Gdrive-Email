@@ -125,6 +125,15 @@ function initSchema(db: Database.Database) {
       tokens TEXT NOT NULL,
       updated_at TEXT DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS data_cache (
+      key TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      data TEXT NOT NULL,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_data_cache_source ON data_cache(source);
+
     CREATE TABLE IF NOT EXISTS wise_cache (
       key TEXT PRIMARY KEY,
       data TEXT NOT NULL,
@@ -806,6 +815,33 @@ export function getWiseCacheAge(key: string): number | null {
   const row = getDb().prepare("SELECT updated_at FROM wise_cache WHERE key = ?").get(key) as { updated_at: string } | undefined;
   if (!row) return null;
   return Date.now() - new Date(row.updated_at).getTime();
+}
+
+// ===== Generic Data Cache (Xero, etc.) =====
+
+export function setDataCache(source: string, key: string, data: unknown) {
+  const fullKey = `${source}:${key}`;
+  getDb().prepare(
+    "INSERT INTO data_cache (key, source, data, updated_at) VALUES (?, ?, ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET data = excluded.data, updated_at = datetime('now')"
+  ).run(fullKey, source, JSON.stringify(data));
+}
+
+export function getDataCache(source: string, key: string): { data: unknown; updatedAt: string } | null {
+  const fullKey = `${source}:${key}`;
+  const row = getDb().prepare("SELECT data, updated_at FROM data_cache WHERE key = ?").get(fullKey) as { data: string; updated_at: string } | undefined;
+  if (!row) return null;
+  try { return { data: JSON.parse(row.data), updatedAt: row.updated_at }; } catch { return null; }
+}
+
+export function getAllDataCacheForSource(source: string): Record<string, { data: unknown; updatedAt: string }> {
+  const rows = getDb().prepare("SELECT key, data, updated_at FROM data_cache WHERE source = ?").all(source) as { key: string; data: string; updated_at: string }[];
+  const result: Record<string, { data: unknown; updatedAt: string }> = {};
+  const prefix = `${source}:`;
+  for (const row of rows) {
+    const shortKey = row.key.startsWith(prefix) ? row.key.slice(prefix.length) : row.key;
+    try { result[shortKey] = { data: JSON.parse(row.data), updatedAt: row.updated_at }; } catch { /* skip */ }
+  }
+  return result;
 }
 
 export function getAllWiseCache(): Record<string, { data: unknown; updatedAt: string }> {

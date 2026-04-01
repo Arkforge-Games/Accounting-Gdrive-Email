@@ -1,4 +1,4 @@
-import { saveXeroTokens, loadXeroTokens, clearXeroTokens, setConnection } from "./db";
+import { saveXeroTokens, loadXeroTokens, clearXeroTokens, setConnection, setDataCache, getDataCache, addActivity } from "./db";
 
 const XERO_CLIENT_ID = process.env.XERO_CLIENT_ID || "";
 const XERO_CLIENT_SECRET = process.env.XERO_CLIENT_SECRET || "";
@@ -285,6 +285,42 @@ export async function getInvoices(page = 1, where?: string): Promise<{ Invoices:
   return xeroGet("/Invoices", params);
 }
 
+export async function getAllInvoices(where?: string): Promise<XeroInvoice[]> {
+  const all: XeroInvoice[] = [];
+  let page = 1;
+  while (true) {
+    const res = await getInvoices(page, where);
+    all.push(...res.Invoices);
+    if (res.Invoices.length < 100) break;
+    page++;
+  }
+  return all;
+}
+
+export async function getAllContacts(): Promise<XeroContact[]> {
+  const all: XeroContact[] = [];
+  let page = 1;
+  while (true) {
+    const res = await getContacts(page);
+    all.push(...res.Contacts);
+    if (res.Contacts.length < 100) break;
+    page++;
+  }
+  return all;
+}
+
+export async function getAllBankTransactions(): Promise<XeroBankTransaction[]> {
+  const all: XeroBankTransaction[] = [];
+  let page = 1;
+  while (true) {
+    const res = await getBankTransactions(page);
+    all.push(...res.BankTransactions);
+    if (res.BankTransactions.length < 100) break;
+    page++;
+  }
+  return all;
+}
+
 export async function getInvoice(id: string): Promise<{ Invoices: XeroInvoice[] }> {
   return xeroGet(`/Invoices/${id}`);
 }
@@ -340,4 +376,105 @@ export async function getXeroSummary(): Promise<{
     recentInvoices: invoices.Invoices.slice(0, 5),
     recentBills: bills.Invoices.slice(0, 5),
   };
+}
+
+// ===== Sync & Cache =====
+
+export async function syncXeroData(): Promise<{
+  invoices: number;
+  bills: number;
+  contacts: number;
+  bankTransactions: number;
+  accounts: number;
+}> {
+  if (!isXeroConnected()) throw new Error("Xero not connected");
+
+  const S = "xero";
+
+  // Fetch everything in parallel where possible
+  const [org, allInvoices, allContacts, allBankTx, accountsRes] = await Promise.all([
+    getOrganisation(),
+    getAllInvoices(),
+    getAllContacts(),
+    getAllBankTransactions(),
+    getAccounts(),
+  ]);
+
+  const orgInfo = org.Organisations[0];
+  setDataCache(S, "organisation", orgInfo);
+
+  // Split invoices vs bills
+  const invoices = allInvoices.filter(i => i.Type === "ACCREC");
+  const bills = allInvoices.filter(i => i.Type === "ACCPAY");
+
+  setDataCache(S, "invoices", invoices);
+  setDataCache(S, "bills", bills);
+  setDataCache(S, "contacts", allContacts);
+  setDataCache(S, "bank_transactions", allBankTx);
+  setDataCache(S, "accounts", accountsRes.Accounts);
+
+  // Compute summary stats
+  const outstandingInvoices = invoices.filter(i => i.Status !== "PAID" && i.Status !== "VOIDED" && i.Status !== "DELETED");
+  const outstandingBills = bills.filter(i => i.Status !== "PAID" && i.Status !== "VOIDED" && i.Status !== "DELETED");
+
+  const stats = {
+    organisation: orgInfo?.Name || "Unknown",
+    currency: orgInfo?.BaseCurrency || "HKD",
+    totalInvoices: invoices.length,
+    totalBills: bills.length,
+    outstandingInvoices: outstandingInvoices.length,
+    outstandingBills: outstandingBills.length,
+    totalReceivable: outstandingInvoices.reduce((s, i) => s + i.AmountDue, 0),
+    totalPayable: outstandingBills.reduce((s, i) => s + i.AmountDue, 0),
+    totalContacts: allContacts.length,
+    customers: allContacts.filter(c => c.IsCustomer).length,
+    suppliers: allContacts.filter(c => c.IsSupplier).length,
+    totalBankTransactions: allBankTx.length,
+    totalAccounts: accountsRes.Accounts.length,
+    invoicesByStatus: invoices.reduce<Record<string, number>>((acc, i) => { acc[i.Status] = (acc[i.Status] || 0) + 1; return acc; }, {}),
+    billsByStatus: bills.reduce<Record<string, number>>((acc, i) => { acc[i.Status] = (acc[i.Status] || 0) + 1; return acc; }, {}),
+  };
+  setDataCache(S, "stats", stats);
+
+  setDataCache(S, "last_sync", {
+    timestamp: new Date().toISOString(),
+    invoices: invoices.length,
+    bills: bills.length,
+    contacts: allContacts.length,
+    bankTransactions: allBankTx.length,
+    accounts: accountsRes.Accounts.length,
+  });
+
+  // Update connection status
+  setConnection("xero", {
+    connected: true,
+    email: orgInfo?.Name,
+    lastSync: new Date().toISOString(),
+    fileCount: invoices.length + bills.length,
+  });
+
+  addActivity({
+    action: "sync",
+    source: "xero",
+    details: `Synced ${invoices.length} invoices, ${bills.length} bills, ${allContacts.length} contacts, ${allBankTx.length} bank transactions, ${accountsRes.Accounts.length} accounts`,
+    fileCount: invoices.length + bills.length,
+  });
+
+  return {
+    invoices: invoices.length,
+    bills: bills.length,
+    contacts: allContacts.length,
+    bankTransactions: allBankTx.length,
+    accounts: accountsRes.Accounts.length,
+  };
+}
+
+export function getCachedXeroData(key: string): unknown | null {
+  const cached = getDataCache("xero", key);
+  return cached ? cached.data : null;
+}
+
+export function getLastXeroSync(): Record<string, unknown> | null {
+  const cached = getDataCache("xero", "last_sync");
+  return cached ? cached.data as Record<string, unknown> : null;
 }

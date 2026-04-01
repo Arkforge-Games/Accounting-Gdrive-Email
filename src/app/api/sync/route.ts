@@ -3,6 +3,7 @@ import * as db from "@/lib/db";
 import { getTokens, getAuthenticatedClient, extractFolderId } from "@/lib/google";
 import { fetchEmailAttachments } from "@/lib/imap";
 import { isWiseConfigured, syncWiseData } from "@/lib/wise";
+import { isXeroConnected, syncXeroData } from "@/lib/xero";
 import { google } from "googleapis";
 import type { SyncFile, SyncResult } from "@/lib/types";
 import { Readable } from "stream";
@@ -313,6 +314,26 @@ export async function POST(req: NextRequest) {
   }
   if (!source || source === "email") {
     results.push(await syncEmail());
+  }
+  if ((!source || source === "xero") && isXeroConnected()) {
+    try {
+      const xeroResult = await syncXeroData();
+      results.push({
+        source: "xero",
+        filesAdded: xeroResult.invoices + xeroResult.bills,
+        filesUpdated: 0,
+        errors: [],
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err) {
+      results.push({
+        source: "xero",
+        filesAdded: 0,
+        filesUpdated: 0,
+        errors: [err instanceof Error ? err.message : "Xero sync failed"],
+        timestamp: new Date().toISOString(),
+      });
+    }
   }
   if ((!source || source === "wise") && isWiseConfigured()) {
     try {
