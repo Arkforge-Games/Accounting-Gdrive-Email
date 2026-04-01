@@ -72,7 +72,30 @@ interface XeroAccount {
   Description: string;
 }
 
-type Tab = "overview" | "invoices" | "bills" | "contacts" | "bank" | "accounts";
+interface ReportRow {
+  label: string;
+  value: string;
+  isTotal?: boolean;
+  isSection?: boolean;
+}
+
+interface CrossRefMatch {
+  fileId: string;
+  fileName: string;
+  fileCategory: string;
+  fileVendor: string | null;
+  fileAmount: string | null;
+  fileCurrency: string;
+  xeroInvoiceNumber: string;
+  xeroContact: string;
+  xeroTotal: number;
+  xeroCurrency: string;
+  xeroStatus: string;
+  matchType: string;
+  confidence: string;
+}
+
+type Tab = "overview" | "invoices" | "bills" | "contacts" | "bank" | "accounts" | "pnl" | "balance" | "crossref";
 
 const statusColors: Record<string, string> = {
   DRAFT: "bg-gray-100 text-gray-600",
@@ -108,6 +131,9 @@ export default function XeroPage() {
   const [contacts, setContacts] = useState<XeroContact[]>([]);
   const [bankTxs, setBankTxs] = useState<XeroBankTx[]>([]);
   const [accounts, setAccounts] = useState<XeroAccount[]>([]);
+  const [pnlRows, setPnlRows] = useState<ReportRow[]>([]);
+  const [balanceRows, setBalanceRows] = useState<ReportRow[]>([]);
+  const [crossRefs, setCrossRefs] = useState<CrossRefMatch[]>([]);
   const [search, setSearch] = useState("");
 
   // Expanded invoice rows
@@ -170,6 +196,24 @@ export default function XeroPage() {
           const res = await fetch("/api/xero?action=accounts");
           const data = await res.json();
           setAccounts(data.Accounts || []);
+          break;
+        }
+        case "pnl": {
+          const res = await fetch("/api/xero?action=profit-loss");
+          const data = await res.json();
+          setPnlRows(parseReportRows(data));
+          break;
+        }
+        case "balance": {
+          const res = await fetch("/api/xero?action=balance-sheet");
+          const data = await res.json();
+          setBalanceRows(parseReportRows(data));
+          break;
+        }
+        case "crossref": {
+          const res = await fetch("/api/crossref");
+          const data = await res.json();
+          setCrossRefs(data.matches || []);
           break;
         }
       }
@@ -254,6 +298,9 @@ export default function XeroPage() {
     { key: "contacts", label: "Contacts" },
     { key: "bank", label: "Bank" },
     { key: "accounts", label: "Accounts" },
+    { key: "pnl", label: "P&L" },
+    { key: "balance", label: "Balance Sheet" },
+    { key: "crossref", label: "File Matching" },
   ];
 
   return (
@@ -701,7 +748,146 @@ export default function XeroPage() {
             </div>
           </div>
         )}
+        {/* ===== P&L ===== */}
+        {tab === "pnl" && !tabLoading && (
+          <div className={`${cx.card} overflow-hidden`}>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50/80">
+                  <tr>
+                    <th className={cx.tableHeader}>Account</th>
+                    <th className={`${cx.tableHeader} text-right`}>Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {pnlRows.length === 0 ? (
+                    <tr><td colSpan={2} className="p-8 text-center text-gray-400">No P&L data</td></tr>
+                  ) : pnlRows.map((row, i) => (
+                    <tr key={i} className={`${row.isSection ? "bg-gray-50" : row.isTotal ? "bg-gray-50 font-bold" : "hover:bg-gray-50/50"}`}>
+                      <td className={`${cx.tableCell} ${row.isSection ? "font-bold text-gray-800 text-xs uppercase tracking-wider" : row.isTotal ? "font-bold" : ""}`}>
+                        {!row.isSection && !row.isTotal && <span className="ml-4">{row.label}</span>}
+                        {(row.isSection || row.isTotal) && row.label}
+                      </td>
+                      <td className={`${cx.tableCell} text-right font-mono ${row.isTotal ? "font-bold" : ""} ${row.value.startsWith("-") ? "text-red-600" : ""}`}>
+                        {row.value || ""}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ===== BALANCE SHEET ===== */}
+        {tab === "balance" && !tabLoading && (
+          <div className={`${cx.card} overflow-hidden`}>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50/80">
+                  <tr>
+                    <th className={cx.tableHeader}>Account</th>
+                    <th className={`${cx.tableHeader} text-right`}>Amount (HKD)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {balanceRows.length === 0 ? (
+                    <tr><td colSpan={2} className="p-8 text-center text-gray-400">No Balance Sheet data</td></tr>
+                  ) : balanceRows.map((row, i) => (
+                    <tr key={i} className={`${row.isSection ? "bg-gray-50" : row.isTotal ? "bg-gray-50 font-bold" : "hover:bg-gray-50/50"}`}>
+                      <td className={`${cx.tableCell} ${row.isSection ? "font-bold text-gray-800 text-xs uppercase tracking-wider" : row.isTotal ? "font-bold" : ""}`}>
+                        {!row.isSection && !row.isTotal && <span className="ml-4">{row.label}</span>}
+                        {(row.isSection || row.isTotal) && row.label}
+                      </td>
+                      <td className={`${cx.tableCell} text-right font-mono ${row.isTotal ? "font-bold" : ""} ${row.value.startsWith("-") ? "text-red-600" : ""}`}>
+                        {row.value || ""}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ===== CROSS-REFERENCE / FILE MATCHING ===== */}
+        {tab === "crossref" && !tabLoading && (
+          <div className={`${cx.card} overflow-hidden`}>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50/80">
+                  <tr>
+                    <th className={cx.tableHeader}>Confidence</th>
+                    <th className={cx.tableHeader}>File</th>
+                    <th className={cx.tableHeader}>Xero Invoice</th>
+                    <th className={cx.tableHeader}>Contact</th>
+                    <th className={cx.tableHeader}>File Amount</th>
+                    <th className={cx.tableHeader}>Xero Amount</th>
+                    <th className={cx.tableHeader}>Match Type</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {crossRefs.length === 0 ? (
+                    <tr><td colSpan={7} className="p-8 text-center text-gray-400">No cross-references found. Run Xero sync first.</td></tr>
+                  ) : crossRefs.map((m, i) => (
+                    <tr key={i} className="hover:bg-gray-50/50">
+                      <td className={cx.tableCell}>
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                          m.confidence === "high" ? "bg-green-100 text-green-700" :
+                          m.confidence === "medium" ? "bg-yellow-100 text-yellow-700" :
+                          "bg-gray-100 text-gray-600"
+                        }`}>{m.confidence}</span>
+                      </td>
+                      <td className={`${cx.tableCell} font-medium text-sm`}>
+                        <div className="truncate max-w-xs">{m.fileName}</div>
+                        <div className="text-xs text-gray-400">{m.fileCategory} {m.fileVendor ? `- ${m.fileVendor}` : ""}</div>
+                      </td>
+                      <td className={`${cx.tableCell} font-medium`}>{m.xeroInvoiceNumber}</td>
+                      <td className={`${cx.tableCell} text-gray-600`}>{m.xeroContact}</td>
+                      <td className={`${cx.tableCell} font-mono`}>{m.fileAmount ? `${m.fileCurrency} ${m.fileAmount}` : "-"}</td>
+                      <td className={`${cx.tableCell} font-mono`}>{formatCurrency(m.xeroTotal, m.xeroCurrency)}</td>
+                      <td className={cx.tableCell}>
+                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                          m.matchType === "invoice_number" ? "bg-blue-100 text-blue-700" :
+                          m.matchType === "amount_vendor" ? "bg-purple-100 text-purple-700" :
+                          "bg-gray-100 text-gray-600"
+                        }`}>{m.matchType.replace("_", " ")}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="px-4 py-2 border-t bg-gray-50/50 text-xs text-gray-400">
+              {crossRefs.length} match{crossRefs.length !== 1 ? "es" : ""} found
+            </div>
+          </div>
+        )}
       </div>
     </>
   );
+}
+
+// Parse Xero report response into flat rows for display
+function parseReportRows(data: Record<string, unknown>): ReportRow[] {
+  const rows: ReportRow[] = [];
+  const reports = (data.Reports || data.reports || []) as { Rows: { RowType: string; Title?: string; Rows?: { Cells: { Value: string }[] }[] }[] }[];
+  if (!reports[0]) return rows;
+
+  for (const section of reports[0].Rows) {
+    if (section.Title) {
+      rows.push({ label: section.Title, value: "", isSection: true });
+    }
+    for (const row of section.Rows || []) {
+      const cells = row.Cells || [];
+      if (cells.length >= 2) {
+        const label = cells[0]?.Value || "";
+        const value = cells[1]?.Value || "";
+        if (!label) continue;
+        const isTotal = label.toLowerCase().startsWith("total") || label.toLowerCase().startsWith("net") || label.toLowerCase().startsWith("gross");
+        rows.push({ label, value, isTotal });
+      }
+    }
+  }
+  return rows;
 }
