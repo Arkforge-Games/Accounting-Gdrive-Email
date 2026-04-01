@@ -13,6 +13,7 @@ const XERO_SCOPES = [
   "accounting.contacts.read",
   "accounting.settings.read",
   "accounting.attachments.read",
+  "accounting.reports.read",
 ].join(" ");
 
 const AUTH_URL = "https://login.xero.com/identity/connect/authorize";
