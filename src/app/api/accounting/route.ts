@@ -2,6 +2,20 @@ import { NextRequest, NextResponse } from "next/server";
 import * as db from "@/lib/db";
 import { categorizeFile, extractAmountFromBody, CATEGORIES, STATUSES } from "@/lib/categorize";
 
+async function extractAmountFromPdf(fileId: string): Promise<{ amount: string; currency: string } | null> {
+  try {
+    const fileData = db.getFileContent(fileId);
+    if (!fileData || !fileData.mimeType.includes("pdf")) return null;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const pdfParse = require("pdf-parse");
+    const result = await pdfParse(Buffer.from(fileData.content));
+    if (!result.text) return null;
+    return extractAmountFromBody(result.text);
+  } catch {
+    return null;
+  }
+}
+
 // GET /api/accounting — get indexed files with filters + summary
 export async function GET(req: NextRequest) {
   const p = req.nextUrl.searchParams;
@@ -49,16 +63,25 @@ export async function POST(req: NextRequest) {
 
       const result = categorizeFile(file);
 
-      // Try to extract amount from linked email body
+      // Try to extract amount from email body, then PDF content
       let amount: string | undefined;
       let currency: string | undefined;
       if (result.category !== "junk") {
+        // 1. Try email body first (fast)
         const emailBody = db.getEmailBodyForFile(file.id);
         if (emailBody) {
           const extracted = extractAmountFromBody(emailBody);
           if (extracted) {
             amount = extracted.amount;
             currency = extracted.currency;
+          }
+        }
+        // 2. If no amount from email, try PDF text extraction
+        if (!amount && file.mimeType.includes("pdf")) {
+          const pdfAmount = await extractAmountFromPdf(file.id);
+          if (pdfAmount) {
+            amount = pdfAmount.amount;
+            currency = pdfAmount.currency;
           }
         }
       }
