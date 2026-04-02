@@ -244,6 +244,44 @@ export async function GET(req: NextRequest) {
         return NextResponse.json(sheetsData);
       }
 
+      case "all-data": {
+        // Single endpoint that returns ALL data for AI agents
+        const BASE = "http://localhost:8325";
+        const [
+          overviewRes, accountingRes, xeroRes, wiseRes,
+          analyticsRes, sheetsRes, alertsRes, pipelineRes,
+        ] = await Promise.all([
+          fetch(`${BASE}/api/open?key=${API_KEY}&action=overview`).then(r => r.json()).catch(() => null),
+          fetch(`${BASE}/api/open?key=${API_KEY}&action=accounting&sub=summary`).then(r => r.json()).catch(() => null),
+          fetch(`${BASE}/api/open?key=${API_KEY}&action=xero&sub=summary`).then(r => r.json()).catch(() => null),
+          fetch(`${BASE}/api/open?key=${API_KEY}&action=wise&sub=summary`).then(r => r.json()).catch(() => null),
+          fetch(`${BASE}/api/analytics?action=overview`).then(r => r.json()).catch(() => null),
+          fetch(`${BASE}/api/sheets?action=all`).then(r => r.json()).catch(() => null),
+          fetch(`${BASE}/api/alerts`).then(r => r.json()).catch(() => null),
+          fetch(`${BASE}/api/pipeline?action=status`).then(r => r.json()).catch(() => null),
+        ]);
+
+        return NextResponse.json({
+          overview: overviewRes,
+          accounting: accountingRes,
+          xero: xeroRes,
+          wise: wiseRes,
+          analytics: analyticsRes,
+          sheets: sheetsRes,
+          alerts: alertsRes,
+          pipeline: pipelineRes,
+          generatedAt: new Date().toISOString(),
+        });
+      }
+
+      case "pipeline": {
+        const sub = req.nextUrl.searchParams.get("sub") || "status";
+        const pipelineUrl = `http://localhost:8325/api/pipeline?action=${sub}`;
+        const pipelineRes = await fetch(pipelineUrl);
+        const pipelineData = await pipelineRes.json();
+        return NextResponse.json(pipelineData);
+      }
+
       case "alerts": {
         const alertsRes = await fetch("http://localhost:8325/api/alerts");
         const alertsData = await alertsRes.json();
@@ -265,7 +303,7 @@ export async function GET(req: NextRequest) {
       default:
         return NextResponse.json({
           error: `Unknown action: ${action}`,
-          available: ["overview", "stats", "emails", "email", "files", "search", "activity", "connections", "accounting", "wise", "xero", "analytics", "sheets", "alerts", "sync"],
+          available: ["all-data", "overview", "stats", "emails", "email", "files", "search", "activity", "connections", "accounting", "wise", "xero", "analytics", "sheets", "alerts", "pipeline", "sync"],
         }, { status: 400 });
     }
   } catch (err) {
