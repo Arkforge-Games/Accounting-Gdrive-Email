@@ -546,16 +546,15 @@ export async function syncXeroData(): Promise<{
   const S = "xero";
 
   // Fetch everything in parallel where possible
-  const [org, allInvoices, allContacts, allBankTx, accountsRes, bankAccountsRes, pnlRes, balSheetRes] = await Promise.all([
-    getOrganisation(),
-    getAllInvoices(),
-    getAllContacts(),
-    getAllBankTransactions(),
-    getAccounts(),
-    getBankAccounts().catch(() => ({ accounts: [] })),
-    getProfitAndLoss().catch(() => null),
-    getBalanceSheet().catch(() => null),
-  ]);
+  // Sequential to avoid Xero 429 rate limit (60 calls/min)
+  const org = await getOrganisation();
+  const allInvoices = await getAllInvoices();
+  const allContacts = await getAllContacts();
+  const allBankTx = await getAllBankTransactions();
+  const accountsRes = await getAccounts();
+  const bankAccountsRes = await getBankAccounts().catch(() => ({ accounts: [] as { name: string; code: string; accountId: string; balance: number; currency: string }[] }));
+  const pnlRes = await getProfitAndLoss().catch(() => null);
+  const balSheetRes = await getBalanceSheet().catch(() => null);
 
   const orgInfo = org.Organisations[0];
   setDataCache(S, "organisation", orgInfo);
