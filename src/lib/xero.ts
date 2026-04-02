@@ -461,6 +461,38 @@ export async function getAgedPayables(date?: string) {
   return getReport("AgedPayablesByContact", params);
 }
 
+export async function getBankAccounts(): Promise<{ accounts: { name: string; code: string; accountId: string; balance: number; currency: string }[] }> {
+  const accountsRes = await getAccounts();
+  const bankAccounts = (accountsRes.Accounts || []).filter((a: XeroAccount) => a.Type === "BANK" && a.Status === "ACTIVE");
+
+  // Get balances from bank summary
+  const summary = await getBankSummary();
+  const reports = (summary as { Reports?: { Rows?: { Rows?: { Cells?: { Value: string; Attributes?: { Value: string; Id: string }[] }[] }[] }[] }[] }).Reports || [];
+  const rows = reports[0]?.Rows || [];
+
+  const balances: Record<string, number> = {};
+  for (const section of rows) {
+    for (const row of section.Rows || []) {
+      const cells = row.Cells || [];
+      if (cells.length >= 5) {
+        const name = cells[0]?.Value || "";
+        const closing = parseFloat(cells[4]?.Value || "0");
+        if (name && !isNaN(closing)) balances[name] = closing;
+      }
+    }
+  }
+
+  return {
+    accounts: bankAccounts.map((a: XeroAccount) => ({
+      name: a.Name,
+      code: a.Code,
+      accountId: a.AccountID,
+      balance: balances[a.Name] || 0,
+      currency: "HKD",
+    })),
+  };
+}
+
 export async function getTrialBalance(date?: string) {
   const params: Record<string, string> = {};
   if (date) params.date = date;
@@ -514,12 +546,15 @@ export async function syncXeroData(): Promise<{
   const S = "xero";
 
   // Fetch everything in parallel where possible
-  const [org, allInvoices, allContacts, allBankTx, accountsRes] = await Promise.all([
+  const [org, allInvoices, allContacts, allBankTx, accountsRes, bankAccountsRes, pnlRes, balSheetRes] = await Promise.all([
     getOrganisation(),
     getAllInvoices(),
     getAllContacts(),
     getAllBankTransactions(),
     getAccounts(),
+    getBankAccounts().catch(() => ({ accounts: [] })),
+    getProfitAndLoss().catch(() => null),
+    getBalanceSheet().catch(() => null),
   ]);
 
   const orgInfo = org.Organisations[0];
@@ -534,6 +569,9 @@ export async function syncXeroData(): Promise<{
   setDataCache(S, "contacts", allContacts);
   setDataCache(S, "bank_transactions", allBankTx);
   setDataCache(S, "accounts", accountsRes.Accounts);
+  setDataCache(S, "bank_accounts", bankAccountsRes.accounts);
+  if (pnlRes) setDataCache(S, "profit_loss", pnlRes);
+  if (balSheetRes) setDataCache(S, "balance_sheet", balSheetRes);
 
   // Compute summary stats
   const outstandingInvoices = invoices.filter(i => i.Status !== "PAID" && i.Status !== "VOIDED" && i.Status !== "DELETED");
@@ -555,6 +593,8 @@ export async function syncXeroData(): Promise<{
     totalAccounts: accountsRes.Accounts.length,
     invoicesByStatus: invoices.reduce<Record<string, number>>((acc, i) => { acc[i.Status] = (acc[i.Status] || 0) + 1; return acc; }, {}),
     billsByStatus: bills.reduce<Record<string, number>>((acc, i) => { acc[i.Status] = (acc[i.Status] || 0) + 1; return acc; }, {}),
+    bankAccounts: bankAccountsRes.accounts,
+    totalBankBalance: bankAccountsRes.accounts.reduce((s, a) => s + a.balance, 0),
   };
   setDataCache(S, "stats", stats);
 
