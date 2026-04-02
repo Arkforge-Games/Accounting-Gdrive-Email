@@ -4,6 +4,8 @@ import { isAIConfigured, aiCategorizeFile } from "./ai-categorize";
 import { appendPayableRow, appendReceivableRow, getPayables, getReceivables } from "./sheets";
 import { isXeroConnected, createBill, createInvoice } from "./xero";
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 const PAYABLE_CATEGORIES = new Set(["bill", "reimbursement", "receipt", "payroll"]);
 const RECEIVABLE_CATEGORIES = new Set(["invoice"]);
 const SKIP_CATEGORIES = new Set(["junk", "uncategorized", "contract", "permit", "quotation", "bank_statement", "tax"]);
@@ -154,6 +156,7 @@ export async function runPipeline(): Promise<PipelineResult> {
             });
             db.logPipeline({ runId, fileId: file.id, action: "record", status: "success", result: "payable", details: `${file.vendor} ${file.currency} ${file.amount}` });
             result.recorded++;
+            await sleep(1200); // Throttle: max ~50 writes/min to stay under Google Sheets 60/min limit
 
             // Auto-create Xero bill (DRAFT) for payable items with amount
             if (isXeroConnected() && file.amount && parseFloat(file.amount) > 0) {
@@ -189,6 +192,7 @@ export async function runPipeline(): Promise<PipelineResult> {
             });
             db.logPipeline({ runId, fileId: file.id, action: "record", status: "success", result: "receivable", details: `${file.vendor} ${file.currency} ${file.amount}` });
             result.recorded++;
+            await sleep(1200); // Throttle Google Sheets writes
 
             // Auto-create Xero invoice (DRAFT) for receivable items
             if (isXeroConnected() && file.amount && parseFloat(file.amount) > 0) {
