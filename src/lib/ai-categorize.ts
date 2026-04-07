@@ -128,25 +128,46 @@ CATEGORY:
 - "tax" = BIR forms, tax returns, withholding certificates
 - "bank_statement" = monthly bank statements
 
-SHEET TYPE (the most important field — Andrea's rules):
-- "Supplier" = ONLY traditional vendor invoices paid via bank transfer (NOT credit card)
-- "CC" = ANY expense charged to a credit card (Cloudflare, AWS, SaaS subscriptions, Google Ads)
-  → IMPORTANT: SaaS/cloud/online subscriptions are usually CC, not Supplier
-- "Cash" = paid in physical cash
-- "Reimbursement" = employee reimbursement (Andrea de Vera personal expenses)
-- "Freelancer" = freelancer/contractor payment (Jamie Bonsay, Jayvee, etc.) — NOT payroll
-- "Freelancer - Reimbursement" = freelancer reimbursing for something
-- "Staff" = staff/employee expense (NOT freelancer, NOT payroll)
-- "Payroll" = ONLY actual salary/wage payments to employees
-- "Invoice" = receivable invoice (money coming in)
+SHEET TYPE — DETERMINED BY HOW IT WAS PAID, NOT THE DOCUMENT TYPE:
 
-EXAMPLES:
-- "Cloudflare domain" → category=bill, sheetType=CC, paymentMethod="Credit Card"
-- "Jayvee blog reimbursement" → category=reimbursement, sheetType=Freelancer (NOT Payroll)
-- "Andrea reimbursement Anthropic" → category=reimbursement, sheetType=Reimbursement, paymentMethod="Andrea CC"
-- "Cathay Pacific flight ticket" → category=receipt, sheetType=Reimbursement (it's an expense to reimburse)
+⚠️ CRITICAL: "Receipt" is NOT a valid sheet type. NEVER use sheetType="Receipt".
+The document being a receipt does NOT mean sheetType=Receipt. The sheet type is about HOW it was PAID:
+
+- "CC" = paid by COMPANY credit card (Cloudflare, AWS, GitHub, OpenAI billed to company, Google Ads, SaaS subscriptions)
+  → If a vendor charges your credit card automatically (subscription, monthly billing), it's CC
+  → SaaS/cloud/online services are almost always CC
+- "Reimbursement" = paid by EMPLOYEE personally (Andrea de Vera) and being reimbursed
+  → If the email/PDF is forwarded by Andrea or to admin@hobbyland-group.com from Andrea's personal payment, it's Reimbursement
+- "Freelancer" = payment to a freelancer/contractor (Jamie Bonsay, Jayvee, JM, Murphy, Aarati)
+- "Freelancer - Reimbursement" = freelancer reimbursing for something on behalf of company
+- "Staff" = staff/employee expense (NOT freelancer, NOT payroll)
+- "Payroll" = ACTUAL salary/wage payments only (not reimbursements, not freelancer payments)
+- "Supplier" = bank transfer to traditional supplier (NOT credit card, NOT subscription)
+- "Cash" = paid in physical cash
+- "Invoice" = sales invoice we sent to a customer (money coming in)
+
+DECISION TREE for sheetType:
+1. Is this money we're RECEIVING from a customer? → Invoice
+2. Was it paid by Andrea's personal CC and being reimbursed? → Reimbursement
+3. Is the recipient a freelancer (Jamie/Jayvee/Aarati/etc.)? → Freelancer
+4. Is it a SaaS/cloud/online subscription (Cloudflare/GitHub/AWS/OpenAI/Anthropic/Google Ads)? → CC
+5. Is it auto-billed to a company credit card? → CC
+6. Is it a bank wire to a supplier with an invoice? → Supplier
+7. Is it cash? → Cash
+8. Is it salary to a payrolled employee? → Payroll
+
+EXAMPLES (CRITICAL — STUDY THESE):
+- "Cloudflare domain receipt" → category=bill, sheetType=CC (NOT Receipt!)
+- "GitHub Payment Receipt" → category=bill, sheetType=CC (NOT Receipt!)
+- "OpenAI receipt" → category=bill, sheetType=CC (NOT Receipt!)
+- "Anthropic Claude subscription receipt" → category=bill, sheetType=CC (NOT Receipt!)
+- "Google Ads invoice" → category=bill, sheetType=CC
+- "Jayvee blog reimbursement" → category=reimbursement, sheetType=Freelancer (NOT Payroll!)
 - "Jamie Bonsay design payment" → category=reimbursement, sheetType=Freelancer
-- "Google Ads invoice" → category=bill, sheetType=CC, paymentMethod="Credit Card"
+- "Andrea reimbursement Anthropic Max" → category=reimbursement, sheetType=Reimbursement, paymentMethod="Andrea CC"
+- "Cathay Pacific flight ticket" → category=receipt, sheetType=Reimbursement (it's a travel expense being reimbursed)
+- "WebWork workspace payment" → category=bill, sheetType=CC
+- "Salary slip employee" → category=payroll, sheetType=Payroll
 
 CURRENCY:
 - Be careful with currency detection — look at the symbol AND the amount carefully
@@ -179,9 +200,13 @@ function parseAIResponse(content: string): AICategorizeResult {
       "contract", "reimbursement", "permit", "quotation", "junk", "uncategorized",
     ];
 
+    // Andrea's rule: "Receipt" is NOT a valid sheet type. Convert it to CC.
+    let sheetType = parsed.sheetType || null;
+    if (sheetType === "Receipt") sheetType = "CC";
+
     return {
       category: validCategories.includes(parsed.category) ? parsed.category : "uncategorized",
-      sheetType: parsed.sheetType || null,
+      sheetType,
       paymentMethod: parsed.paymentMethod || null,
       vendor: parsed.vendor || null,
       amount: parsed.amount || null,

@@ -38,10 +38,56 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(result);
     }
 
+    if (action === "fix-receipt-to-cc") {
+      const result = await fixReceiptToCC();
+      return NextResponse.json(result);
+    }
+
     return NextResponse.json({ error: "Unknown action. Use: enrich-payable, populate-receivable, all, clear-reimbursement-debits" }, { status: 400 });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Unknown error" }, { status: 500 });
   }
+}
+
+async function fixReceiptToCC(): Promise<{ fixed: number; details: string[] }> {
+  const sheets = getSheets();
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: "Payable!A1:R500",
+  });
+  const rows = res.data.values || [];
+  const updates: { range: string; values: string[][] }[] = [];
+  const details: string[] = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row || row.length === 0) continue;
+    const type = (row[1] || "").trim();
+    const supplierName = (row[3] || "").trim();
+    const paymentMethod = (row[12] || "").trim();
+
+    // Andrea's rule: "Receipt" is not a valid type. Convert to CC.
+    if (type === "Receipt") {
+      updates.push({ range: `Payable!B${i + 1}`, values: [["CC"]] });
+      // Also set payment method to Credit Card if empty
+      if (!paymentMethod || paymentMethod === "Bank") {
+        updates.push({ range: `Payable!M${i + 1}`, values: [["Credit Card"]] });
+      }
+      details.push(`Row ${i + 1}: ${supplierName} (Receipt → CC)`);
+    }
+  }
+
+  if (updates.length > 0) {
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId: SPREADSHEET_ID,
+      requestBody: {
+        valueInputOption: "USER_ENTERED",
+        data: updates,
+      },
+    });
+  }
+
+  return { fixed: details.length, details };
 }
 
 async function clearReimbursementDebits(): Promise<{ cleared: number }> {
