@@ -1,3 +1,25 @@
+/**
+ * Database Layer — SQLite (better-sqlite3)
+ *
+ * All persistent data lives in data/accounting.db. WAL mode for concurrency.
+ *
+ * Tables:
+ * - emails               - Synced emails from IMAP
+ * - files                - File attachments + Drive files (with content BLOBs)
+ * - file_index           - Accounting metadata: category, vendor, amount, sheet_type, payment_method
+ * - activity             - Audit log of sync/categorize/record actions
+ * - connections          - Status of each integration (gmail, gdrive, xero, wise)
+ * - settings             - Key-value app settings
+ * - google_tokens        - Google OAuth tokens
+ * - xero_tokens          - Xero OAuth tokens + tenant info
+ * - data_cache           - Cached Xero/Sheets data (key/source/data)
+ * - wise_cache           - Cached Wise data + exchange rates
+ * - pipeline_log         - Autonomous pipeline audit trail
+ * - chat_conversations   - AI chat history (titles)
+ * - chat_messages        - Individual chat messages
+ *
+ * See docs/DATABASE.md for full schema reference.
+ */
 import Database from "better-sqlite3";
 import path from "path";
 import type { SyncFile, ActivityEntry, ConnectionStatus } from "./types";

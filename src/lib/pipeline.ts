@@ -1,13 +1,28 @@
+/**
+ * AccountSync Autonomous Pipeline
+ *
+ * Runs every hour (retry) and daily at 6PM (full sync). Processes new files
+ * through: scan → categorize (rules → AI) → extract amount → check duplicate
+ * → record to Google Sheet → create DRAFT in Xero → log everything.
+ *
+ * See docs/PIPELINE.md for full documentation.
+ */
 import * as db from "./db";
 import { categorizeFile, extractAmountFromBody } from "./categorize";
 import { isAIConfigured, aiCategorizeFile } from "./ai-categorize";
 import { appendPayableRow, appendReceivableRow, getPayables, getReceivables } from "./sheets";
 import { isXeroConnected, createBill, createInvoice } from "./xero";
 
+/** Sleep helper to throttle Google Sheets writes (max 60/min) */
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+/** Categories that get recorded to the Payable tab */
 const PAYABLE_CATEGORIES = new Set(["bill", "reimbursement", "receipt", "payroll"]);
+
+/** Categories that get recorded to the Receivable tab */
 const RECEIVABLE_CATEGORIES = new Set(["invoice"]);
+
+/** Categories the pipeline skips (won't record to sheets) */
 const SKIP_CATEGORIES = new Set(["junk", "uncategorized", "contract", "permit", "quotation", "bank_statement", "tax"]);
 
 export interface PipelineResult {
@@ -23,6 +38,24 @@ export interface PipelineResult {
   details: string[];
 }
 
+/**
+ * Runs the complete autonomous pipeline.
+ *
+ * Flow:
+ *   1. Scan for unrecorded files (status != 'recorded')
+ *   2. For each file:
+ *      a. If uncategorized → run rule-based categorize
+ *      b. If still uncategorized → run AI categorize (extracts vendor, amount, type)
+ *      c. Extract amount from email body if missing
+ *      d. Skip if junk/uncategorized
+ *      e. Check duplicate against existing sheet rows
+ *      f. Record to Payable or Receivable tab in Google Sheet
+ *      g. Auto-create DRAFT bill/invoice in Xero
+ *   3. Log every action to pipeline_log table
+ *   4. Throttle: 1.2s between Sheets writes (avoids 60/min quota)
+ *
+ * @returns Summary of files processed, recorded, duplicates, errors
+ */
 export async function runPipeline(): Promise<PipelineResult> {
   const runId = crypto.randomUUID();
   const result: PipelineResult = {

@@ -1,8 +1,21 @@
+/**
+ * AI Categorization via OpenRouter
+ *
+ * Sends file metadata + email body + PDF text to an LLM and extracts:
+ * - category (invoice, bill, receipt, etc.)
+ * - sheetType (CC, Reimbursement, Freelancer, Supplier, etc. — Andrea's rules)
+ * - paymentMethod (Andrea CC, Credit Card, Bank, Cash)
+ * - vendor, amount, currency, description
+ *
+ * The system prompt contains Andrea's accounting rules (see docs/AI-RULES.md).
+ *
+ * Model is configurable via AI_MODEL env var. Default: openai/gpt-oss-120b:free
+ */
 import type { SyncFile } from "./types";
 import type { CategoryKey } from "./categorize";
 
 const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY || "";
-const MODEL = process.env.AI_MODEL || "qwen/qwen3.6-plus-preview:free";
+const MODEL = process.env.AI_MODEL || "openai/gpt-oss-120b:free";
 
 interface AICategorizeResult {
   category: CategoryKey;
@@ -19,6 +32,19 @@ export function isAIConfigured(): boolean {
   return !!OPENROUTER_KEY;
 }
 
+/**
+ * Categorize a single file using AI.
+ *
+ * @param file - File metadata (name, mime, source, email subject/from, etc.)
+ * @param emailBody - Optional plain text body of the linked email
+ * @param pdfText - Optional extracted text from PDF content
+ * @returns AI's classification with category, sheetType, paymentMethod, amount, etc.
+ *
+ * @example
+ * const result = await aiCategorizeFile(file, "...", "...");
+ * // { category: "bill", sheetType: "CC", paymentMethod: "Credit Card",
+ * //   vendor: "Cloudflare, Inc.", amount: "9.77", currency: "USD", ... }
+ */
 export async function aiCategorizeFile(
   file: SyncFile,
   emailBody?: string | null,

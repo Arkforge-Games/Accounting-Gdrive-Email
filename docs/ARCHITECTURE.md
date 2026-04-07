@@ -1,217 +1,152 @@
-# Architecture Documentation
+# Architecture
 
-## Overview
+This document describes the high-level architecture of the HobbyLand Accounting application: a Next.js dashboard that ingests financial documents from multiple sources, classifies them with rules + AI, and writes the results to Google Sheets and Xero.
 
-AccountSync is a full-stack Next.js application that serves as a centralized accounting file manager. It connects to Gmail (via IMAP) and Google Drive (via OAuth2) to pull in all emails, attachments, and documents into a local SQLite database.
+---
 
-## System Architecture
-
-```
-┌──────────────────────────────────────────────────────────┐
-│                     Browser (Client)                      │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐  │
-│  │ Dashboard │ │  Emails  │ │  Files   │ │  Settings  │  │
-│  └─────┬────┘ └─────┬────┘ └─────┬────┘ └──────┬─────┘  │
-└────────┼────────────┼────────────┼──────────────┼────────┘
-         │            │            │              │
-         ▼            ▼            ▼              ▼
-┌──────────────────────────────────────────────────────────┐
-│                   Next.js API Routes                      │
-│  /api/sync    /api/emails    /api/files    /api/search   │
-└────────┬────────────┬────────────┬──────────────┬────────┘
-         │            │            │              │
-         ▼            ▼            ▼              ▼
-┌──────────────────────────────────────────────────────────┐
-│                    Data Layer (lib/)                       │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐  │
-│  │  imap.ts  │ │ google.ts│ │  db.ts   │ │  types.ts  │  │
-│  └─────┬────┘ └─────┬────┘ └─────┬────┘ └────────────┘  │
-└────────┼────────────┼────────────┼───────────────────────┘
-         │            │            │
-         ▼            ▼            ▼
-┌────────────┐ ┌────────────┐ ┌──────────────────┐
-│   Gmail    │ │  Google    │ │  SQLite Database  │
-│   IMAP     │ │  Drive API │ │  (accounting.db)  │
-└────────────┘ └────────────┘ └──────────────────┘
-```
-
-## Data Flow
-
-### Email Sync Flow
+## High-Level System Architecture
 
 ```
-1. User clicks "Sync Email" or POST /api/sync?source=email
-2. sync/route.ts calls syncEmail()
-3. imap.ts connects to imap.gmail.com:993 with App Password
-4. Fetches ALL messages from INBOX (seq 1:*)
-5. For each message:
-   a. simpleParser parses raw source into structured data
-   b. db.upsertEmail() stores full email (subject, from, to, cc, bcc,
-      body text, body HTML, headers, raw source, message ID)
-   c. For each attachment:
-      - db.upsertFiles() stores metadata + file content as BLOB
-      - Links to email via email_id foreign key
-6. db.setConnection() updates gmail connection status
-7. db.addActivity() logs the sync action
-8. Returns JSON with { filesAdded, filesUpdated, errors }
+┌──────────────┐      ┌──────────────────┐      ┌──────────────┐      ┌──────────────────┐
+│  End Users   │─────▶│  DNS             │─────▶│  Alibaba     │─────▶│  Azure VM        │
+│  (browsers)  │      │  accounting.     │      │  Cloud Proxy │      │  (Next.js app)   │
+└──────────────┘      │  devehub.app     │      │  (HK region) │      │                  │
+                      └──────────────────┘      └──────────────┘      └────────┬─────────┘
+                                                                                │
+                                                                                ▼
+                                                                       ┌──────────────────┐
+                                                                       │ SQLite (WAL)     │
+                                                                       │ data/            │
+                                                                       │ accounting.db    │
+                                                                       └──────────────────┘
+                                                                                │
+                                            ┌───────────────────┬───────────────┼───────────────┬───────────────┐
+                                            ▼                   ▼               ▼               ▼               ▼
+                                       ┌─────────┐         ┌─────────┐    ┌─────────┐     ┌─────────┐     ┌─────────┐
+                                       │  Gmail  │         │ GDrive  │    │  Xero   │     │  Wise   │     │  Sheets │
+                                       │  IMAP   │         │  API    │    │  API    │     │  API    │     │  API    │
+                                       └─────────┘         └─────────┘    └─────────┘     └─────────┘     └─────────┘
 ```
 
-### File Download Flow
+### Request flow
 
-```
-1. User clicks Download on a file
-2. GET /api/files/{id}/download
-3. db.getFileContent() reads BLOB from SQLite
-4. Returns binary response with proper Content-Type and Content-Disposition
-```
+1. A user browser requests `https://accounting.devehub.app`.
+2. DNS resolves to an Alibaba Cloud proxy (Hong Kong region).
+3. The proxy terminates TLS and forwards the request to an Azure VM running the Next.js application.
+4. Next.js handles the request, reading/writing to a local SQLite database and contacting external APIs as needed.
 
-### Download All Flow
+### Why Alibaba proxy in front of Azure VM?
 
-```
-1. GET /api/files/download-all
-2. Fetches all files from DB
-3. archiver creates a streaming ZIP
-4. Each file BLOB is added to the archive
-5. Streams ZIP to client as chunked transfer
-```
+- The Azure VM lives outside Hong Kong / mainland routes, so direct connections are slow and unreliable for users in Asia.
+- Routing through the Alibaba HK proxy gives users in HK / mainland China low-latency access while keeping the application + data hosted on Azure.
+- The proxy also acts as a stable public entry point so the Azure VM IP can change without DNS updates.
+- It provides an extra layer of TLS termination and request shaping in front of the Next.js process.
 
-## Database Design
+---
 
-### Entity Relationship
+## Data Sources
 
-```
-┌─────────────┐       ┌─────────────┐
-│   emails     │       │    files     │
-│─────────────│       │─────────────│
-│ id (PK)     │◄──────│ email_id(FK)│
-│ uid         │       │ id (PK)     │
-│ message_id  │       │ name        │
-│ subject     │       │ mime_type   │
-│ from_address│       │ source      │
-│ from_name   │       │ content     │
-│ to_addresses│       │ starred     │
-│ cc_addresses│       │ size_bytes  │
-│ body_text   │       │ has_content │
-│ body_html   │       └─────────────┘
-│ headers     │
-│ raw_source  │       ┌─────────────┐
-│ date        │       │  activity   │
-└─────────────┘       │─────────────│
-                      │ id (PK)     │
-┌─────────────┐       │ action      │
-│ connections  │       │ source      │
-│─────────────│       │ details     │
-│ source (PK) │       │ timestamp   │
-│ connected   │       └─────────────┘
-│ email       │
-│ last_sync   │
-│ file_count  │
-└─────────────┘
-```
+The application integrates **5 external data sources**. All ingest paths converge into the same SQLite database via `src/lib/db.ts`.
 
-### Storage Strategy
+| # | Source        | Module                            | Type        | Purpose                                                                                  |
+|---|---------------|-----------------------------------|-------------|------------------------------------------------------------------------------------------|
+| 1 | Gmail (IMAP)  | `src/lib/imap.ts`                 | Pull        | Downloads emails and their attachments. Stored in `emails` and `files` tables.           |
+| 2 | Google Drive  | `src/lib/google.ts` + `/api/sync` | OAuth pull  | Walks My Drive + "Shared with me", downloads file content into `files`.                  |
+| 3 | Xero          | `src/lib/xero.ts`                 | OAuth API   | Pulls invoices/bills for cross-reference; pushes new DRAFT bills/invoices.               |
+| 4 | Wise          | `src/lib/wise.ts`                 | API key     | Pulls transfer history into `wise_cache` for reconciliation.                             |
+| 5 | Google Sheets | `src/lib/sheets.ts`               | OAuth API   | Reads existing payable/receivable rows for duplicate checks; appends new rows.           |
 
-- **Email bodies:** Stored as TEXT (body_text, body_html) for searchability
-- **Attachments:** Stored as BLOB in files.content column
-- **Raw email source:** Stored as BLOB in emails.raw_source for full fidelity
-- **SQLite WAL mode:** Enabled for better concurrent read performance
-- **Indexes:** On date, source, starred, name, from_address, subject for fast queries
+The unified sync entry point is `POST /api/sync?source=<gdrive|email|xero|wise>` (see `src/app/api/sync/route.ts`). Calling without a `source` parameter syncs all sources sequentially.
 
-## Component Architecture
+### Gmail (IMAP)
 
-### Layout Hierarchy
+- Fetches messages and attachments via `fetchEmailAttachments()`.
+- Stores full message metadata + body in the `emails` table; saves each attachment to the `files` table with an `email_id` foreign key, so the pipeline can later read the original email body for amount extraction.
 
-```
-RootLayout (app/layout.tsx)
-├── Landing Page (app/page.tsx)
-├── Login Page (app/login/page.tsx)
-└── DashboardLayout (app/dashboard/layout.tsx)
-    ├── Sidebar (components/Sidebar.tsx)
-    └── Page Content
-        ├── Overview (dashboard/page.tsx)
-        │   ├── StatCard x4
-        │   ├── Quick Actions
-        │   └── FileTable (recent)
-        ├── Emails (dashboard/emails/page.tsx)
-        │   ├── Email List (left panel)
-        │   └── Email Detail (right panel)
-        ├── Files (dashboard/files/page.tsx)
-        │   ├── Filter bar
-        │   └── FileTable
-        ├── Starred (dashboard/starred/page.tsx)
-        ├── Search (dashboard/search/page.tsx)
-        ├── Activity (dashboard/activity/page.tsx)
-        └── Settings (dashboard/settings/page.tsx)
-            ├── ConnectionCard x3
-            ├── Sync Preferences
-            └── Danger Zone
-```
+### Google Drive
 
-### Shared Components
+- Authenticates via Google OAuth, tokens persisted in `google_tokens`.
+- `listAllFiles()` recursively walks "My Drive" + "Shared with me", paginating 100 files at a time.
+- Google Workspace docs (Docs/Sheets/Slides) are exported to PDF/XLSX/PPTX using `EXPORT_MIMES`. Folders/forms/maps/sites/shortcuts are skipped.
+- Each file is downloaded and saved to the DB **immediately** (not batched) to avoid OOM on large drives.
+- A specific folder can be configured via the `gdrive_folder` setting; otherwise the whole drive is scanned.
 
-| Component | Purpose | Used In |
-|-----------|---------|---------|
-| `Sidebar` | Navigation with sync button | All dashboard pages |
-| `TopBar` | Page title + global search | All dashboard pages |
-| `FileTable` | Sortable, selectable file list | Overview, Files, Starred, Search |
-| `FilePreviewModal` | File detail overlay | FileTable |
-| `StatCard` | Metric display card | Overview |
-| `ConnectionCard` | Account connection status | Settings |
+### Xero
 
-## Security Considerations
+- OAuth2 connection, tokens in `xero_tokens`.
+- `syncXeroData()` pulls invoices and bills for analytics + cross-referencing.
+- The pipeline pushes new bills/invoices as **DRAFT** so the human accountant always has a final review step.
 
-- **Credentials:** Stored only in `.env.local` on the server, never in git
-- **Gmail:** Uses App Password (not regular password) for IMAP access
-- **Email rendering:** HTML emails rendered in sandboxed iframe
-- **Database:** SQLite file in `data/` directory, gitignored
-- **No authentication on the web app itself** — relies on network-level access control (firewall/NSG)
+### Wise
 
-## Deployment
+- API-key authentication (`isWiseConfigured()`).
+- `syncWiseData()` pulls transfer history into `wise_cache` for reconciliation against payables.
 
-### Infrastructure
+### Google Sheets
 
-```
-Azure VM: General-Agent (74.226.88.89)
-├── OS: Ubuntu 22.04
-├── Runtime: Node.js 22
-├── Process: systemd (accounting-sync.service)
-├── Reverse proxy: nginx
-├── Firewall: UFW (port 8325 open)
-├── Azure NSG: port 8325 open
-└── Database: /opt/accounting-sync/data/accounting.db
-```
+- Uses the same Google OAuth tokens as GDrive.
+- `getPayables()` / `getReceivables()` are called by the pipeline at the start of each run to load all existing rows for duplicate detection.
+- `appendPayableRow()` / `appendReceivableRow()` write new rows. Writes are throttled to ~1 every 1.2s to stay under the Sheets API 60 writes/minute quota.
 
-### Deploy Process
+---
 
-```bash
-# Local: edit, build, commit, push
-npm run build
-git add -A && git commit -m "message" && git push
+## Authentication
 
-# VM: pull, build, restart
-cd /opt/accounting-sync
-git pull origin master
-npm install    # only if dependencies changed
-npm run build
-systemctl restart accounting-sync
-```
+Authentication is enforced by `src/middleware.ts` which runs on every matching request.
 
-### systemd Service
+- **Matcher**: `/dashboard/:path*` and `/api/:path*`.
+- **Public routes** (no session required): `/`, `/login`, `/api/auth/*`, `/api/open*`, `/api/chat`, `/api/analytics`, `/api/alerts`, `/api/sheets/*`, `/api/wise/*`, `/api/xero/*`, `/api/reports/*`, `/api/crossref`, `/api/pipeline`, `/api/files/<id>/download`, plus Next.js internals.
+- These public API routes are intentionally open because the dashboard's client-side code calls them directly without going through a session-bearing fetch wrapper, and because external cron / receipt-link traffic must hit them without a cookie.
+- **Session format**: a cookie named `session` containing `<base64 payload>.<HMAC-SHA256 hex>`. The HMAC is computed with `NEXTAUTH_SECRET` using the WebCrypto subtle API (works in the Edge runtime).
+- **Internal traffic exemption**: requests from `localhost`, `127.0.0.1`, or `10.0.0.*` hosts bypass auth so server-to-server pings (e.g. cron from inside the VM) work without a session.
+- Unauthorized API requests get `401 JSON`; unauthorized page requests get a redirect to `/login`.
 
-```ini
-[Unit]
-Description=AccountSync Next.js App
-After=network.target
+---
 
-[Service]
-Type=simple
-WorkingDirectory=/opt/accounting-sync
-ExecStart=/usr/bin/node node_modules/.bin/next start -p 8325
-Restart=always
-RestartSec=5
-Environment=NODE_ENV=production
-Environment=PORT=8325
+## Database
 
-[Install]
-WantedBy=multi-user.target
-```
+- Engine: **SQLite** via `better-sqlite3`.
+- File: `data/accounting.db` (relative to `process.cwd()`); the directory is auto-created on first boot.
+- **WAL mode** (`journal_mode = WAL`) is enabled so reads do not block writes — important because the dashboard reads heavily while the pipeline writes during sync runs.
+- `foreign_keys = ON` for referential integrity.
+- Schema is defined and migrated in `initSchema()` using `CREATE TABLE IF NOT EXISTS` plus a few defensive `ALTER TABLE` calls for additive columns.
+
+### Tables (summary)
+
+| Table                | Purpose                                                                       |
+|----------------------|-------------------------------------------------------------------------------|
+| `emails`             | Full Gmail messages with body + raw source, used as source for amount extraction. |
+| `files`              | Every ingested document (Gmail attachments + GDrive files), with binary content. |
+| `file_index`         | Per-file accounting metadata: category, vendor, amount, sheet type, review flags. |
+| `activity`           | Human-readable log of sync/pipeline activity for the dashboard activity feed.    |
+| `connections`        | Per-source connection state: connected flag, last sync, file count.              |
+| `settings`           | Generic key/value store (e.g. `gdrive_folder`).                                  |
+| `google_tokens`      | Persisted Google OAuth tokens (single row).                                      |
+| `xero_tokens`        | Persisted Xero OAuth tokens + tenant ID (single row).                            |
+| `wise_cache`         | Cached Wise API responses (transfers, balances).                                 |
+| `data_cache`         | Generic per-source JSON cache used by analytics endpoints.                       |
+| `pipeline_log`       | Per-step audit log for every pipeline run (run_id, file_id, action, status).     |
+| `chat_conversations` | Conversation containers for the in-app AI chat assistant.                        |
+| `chat_messages`      | Individual chat turns linked to a conversation.                                  |
+
+For full column-level documentation, see [DATABASE.md](./DATABASE.md).
+
+---
+
+## Cron Schedule
+
+The autonomous pipeline runs on two schedules (configured at the OS / scheduler level):
+
+| Cron              | Purpose                                                                 |
+|-------------------|-------------------------------------------------------------------------|
+| Daily **18:00**   | Full sync of all sources, then full pipeline run.                       |
+| **Hourly retry**  | Re-runs the pipeline against any unrecorded files left behind so transient failures (Sheets quota, Xero 429, AI timeouts) self-heal within the hour. |
+
+Both jobs hit `POST /api/pipeline?action=run`, which is left in the public-routes list so the cron does not need a session cookie.
+
+---
+
+## Related Documentation
+
+- [PIPELINE.md](./PIPELINE.md) — step-by-step pipeline flow, categories, throttling, monitoring.
+- [DATABASE.md](./DATABASE.md) — full schema reference.

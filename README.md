@@ -1,219 +1,162 @@
-# AccountSync - Accounting GDrive & Email
+# AccountSync — Autonomous Accounting Platform
 
-A Next.js web application that syncs and manages accounting files from Google Drive and Gmail. All emails and attachments are downloaded and stored in a local SQLite database for offline access, search, and organization.
+A Next.js web application that automatically syncs, categorizes, and records all accounting documents from Gmail, Google Drive, Xero, Wise, and Google Sheets — with AI-powered classification and a monitoring dashboard.
 
-**Live:** http://74.226.88.89:8325
+**Live URL:** https://accounting.devehub.app
+**Direct URL:** http://74.226.88.89:8325
+**Repo:** https://github.com/Arkforge-Games/Accounting-Gdrive-Email
 
-## Features
+---
 
-- **Email Sync (IMAP)** — Connects to Gmail via IMAP, downloads all emails with full body (text + HTML), headers, metadata, and attachments
-- **Google Drive Sync** — Pulls files from Google Drive via OAuth2 (requires API credentials)
-- **SQLite Storage** — All data persisted in `data/accounting.db` — survives restarts
-- **File Downloads** — Attachments stored as BLOBs, downloadable individually or as a ZIP
-- **Email Viewer** — Full email client with sender avatars, HTML rendering, search
-- **Search** — Full-text search across files, emails, senders, subjects
-- **Star/Bookmark** — Mark important files for quick access
-- **Activity Log** — Tracks all sync, download, star, and delete actions
-- **Filters** — Filter by source (Drive/Gmail), file type (PDF, spreadsheet, image, document), date range
+## What It Does
+
+Syncs accounting data from **5 sources** every day at 6PM:
+1. **Gmail** — emails + attachments via IMAP
+2. **Google Drive** — files via OAuth2
+3. **Xero** — invoices, bills, contacts, P&L, balance sheet
+4. **Wise** — multi-currency transfers, balances, exchange rates
+5. **Google Sheets** — bidirectional Expenses Sheet sync
+
+Then runs an **autonomous pipeline** that:
+1. AI-categorizes each new file (using OpenRouter + Llama/GPT-OSS)
+2. Extracts amounts from PDFs and email bodies
+3. Detects duplicates (vendor + amount + date proximity)
+4. Auto-records to Google Sheets (Payable/Receivable tabs)
+5. Auto-creates DRAFT bills/invoices in Xero
+6. Logs every action to a monitoring dashboard
+
+Every change is auditable. Andrea (the accountant) can review AI decisions on the Monitor page.
+
+---
+
+## Quick Links
+
+| Page | Purpose |
+|------|---------|
+| [/dashboard](https://accounting.devehub.app/dashboard) | Overview — file stats |
+| [/dashboard/chat](https://accounting.devehub.app/dashboard/chat) | AI Assistant (ask questions about your finances) |
+| [/dashboard/analytics](https://accounting.devehub.app/dashboard/analytics) | Multi-currency, spending trends, cash flow, vendors, budget |
+| [/dashboard/expenses](https://accounting.devehub.app/dashboard/expenses) | Google Sheets Payable + Receivable (bidirectional) |
+| [/dashboard/accounting](https://accounting.devehub.app/dashboard/accounting) | All 345+ files categorized by AI |
+| [/dashboard/xero](https://accounting.devehub.app/dashboard/xero) | Xero — 9 tabs: invoices, bills, contacts, P&L, balance sheet, file matching |
+| [/dashboard/wise](https://accounting.devehub.app/dashboard/wise) | 1,385 Wise transfers, recipients, exchange rates |
+| [/dashboard/monitor](https://accounting.devehub.app/dashboard/monitor) | Pipeline run history + audit log |
+| [/dashboard/alerts](https://accounting.devehub.app/dashboard/alerts) | Overdue invoices, duplicates, missing periods |
+| [/dashboard/reports](https://accounting.devehub.app/dashboard/reports) | Monthly accounting reports |
+| [/dashboard/settings](https://accounting.devehub.app/dashboard/settings) | Manage 5 integrations (Gmail, GDrive, Xero, Wise, Outlook) |
+
+---
+
+## Architecture
+
+```
+                    Internet
+                       │
+                       ▼
+            ┌─────────────────────┐
+            │  accounting.devehub.app  │  (DNS → Alibaba Nginx)
+            │    8.210.219.100    │
+            └─────────┬──────────┘
+                      │ HTTPS
+                      ▼
+            ┌─────────────────────┐
+            │  Azure VM (Ubuntu)  │
+            │  74.226.88.89:8325  │
+            └─────────┬──────────┘
+                      │
+            ┌─────────┴─────────────────┐
+            │  Next.js 15 App           │
+            │  (systemd service)        │
+            └─────────┬─────────────────┘
+                      │
+        ┌─────────────┼──────────────────────────┐
+        ▼             ▼              ▼            ▼
+   ┌────────┐   ┌──────────┐   ┌──────────┐  ┌─────────┐
+   │ SQLite │   │  Gmail   │   │  Google  │  │  Xero   │
+   │  data  │   │  IMAP    │   │  Drive   │  │  Wise   │
+   │  .db   │   │          │   │          │  │ Sheets  │
+   └────────┘   └──────────┘   └──────────┘  └─────────┘
+                      │
+                      ▼
+              ┌─────────────┐
+              │  OpenRouter │
+              │  (AI categ) │
+              └─────────────┘
+```
+
+---
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
 | Framework | Next.js 15 (App Router) |
-| Language | TypeScript |
+| Language | TypeScript 5.8 |
 | Styling | Tailwind CSS v4 |
 | Database | SQLite (better-sqlite3) |
 | Email | IMAP (imapflow + mailparser) |
-| Google Drive | googleapis + google-auth-library |
-| File Compression | archiver |
+| Google APIs | googleapis + google-auth-library |
+| Xero | Custom OAuth2 client (xero-node not used) |
+| Wise | REST API (custom client) |
+| AI | OpenRouter (configurable model — Llama 3.3, GPT-OSS, Gemini) |
+| PDF Parsing | pdf-parse |
+| Compression | archiver (ZIP downloads) |
 | Runtime | Node.js 22 |
+| Process Manager | systemd |
+| Hosting | Azure VM + Alibaba Cloud Nginx proxy |
 
-## Pages
+---
 
-| Route | Description |
-|-------|-------------|
-| `/` | Landing page |
-| `/login` | Sign in with Google/Microsoft |
-| `/dashboard` | Overview — stats, quick actions, recent files |
-| `/dashboard/emails` | Email list with detail view, search, HTML rendering |
-| `/dashboard/files` | All attachments — sort, filter, bulk select, download |
-| `/dashboard/starred` | Bookmarked files |
-| `/dashboard/search` | Full-text search with date and source filters |
-| `/dashboard/activity` | Sync and file activity log |
-| `/dashboard/settings` | Account connections, sync preferences |
+## Documentation
 
-## API Endpoints
+| Doc | Purpose |
+|-----|---------|
+| [docs/USER-GUIDE.md](./docs/USER-GUIDE.md) | **For Andrea (accountant)** — how to use the system |
+| [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | System architecture, data flow, design decisions |
+| [docs/PIPELINE.md](./docs/PIPELINE.md) | Autonomous pipeline — categorize, dedupe, record |
+| [docs/AI-RULES.md](./docs/AI-RULES.md) | AI categorization rules and Andrea's feedback |
+| [docs/DATABASE.md](./docs/DATABASE.md) | SQLite schema reference |
+| [documents/Azure/INFRASTRUCTURE.md](./documents/Azure/INFRASTRUCTURE.md) | Azure VM, deployment, systemd service |
+| [documents/OpenClaw/API-GUIDE.md](./documents/OpenClaw/API-GUIDE.md) | API reference for OpenClaw/Mina bot |
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/sync` | Sync all sources |
-| `POST` | `/api/sync?source=email` | Sync Gmail only |
-| `POST` | `/api/sync?source=gdrive` | Sync Google Drive only |
-| `GET` | `/api/files` | List all files |
-| `GET` | `/api/files?starred=true` | List starred files |
-| `GET` | `/api/files/stats` | File and sync statistics |
-| `GET` | `/api/files/[id]` | Get single file metadata |
-| `GET` | `/api/files/[id]/download` | Download file content |
-| `GET` | `/api/files/download-all` | Download all files as ZIP |
-| `POST` | `/api/files/star` | Toggle star on a file |
-| `DELETE` | `/api/files/[id]` | Delete a file |
-| `GET` | `/api/files/activity` | Activity log |
-| `GET` | `/api/files/connections` | Connection statuses |
-| `GET` | `/api/emails` | List all emails |
-| `GET` | `/api/emails?q=search` | Search emails |
-| `GET` | `/api/emails/[id]` | Get full email with body |
-| `GET` | `/api/search?q=term` | Search files |
+---
 
-## Database Schema
-
-### `emails` table
-Stores complete email data from IMAP sync.
-
-| Column | Type | Description |
-|--------|------|-------------|
-| id | TEXT PK | `email_{uid}` |
-| uid | INTEGER | IMAP UID |
-| message_id | TEXT | RFC Message-ID |
-| subject | TEXT | Email subject |
-| from_address | TEXT | Sender email |
-| from_name | TEXT | Sender display name |
-| to_addresses | TEXT | Recipients |
-| cc_addresses | TEXT | CC recipients |
-| bcc_addresses | TEXT | BCC recipients |
-| reply_to | TEXT | Reply-to address |
-| date | TEXT | ISO date |
-| body_text | TEXT | Plain text body |
-| body_html | TEXT | HTML body |
-| headers | TEXT | JSON of all headers |
-| labels | TEXT | Gmail labels |
-| has_attachments | INTEGER | 0 or 1 |
-| attachment_count | INTEGER | Number of attachments |
-| raw_source | BLOB | Full raw email source |
-
-### `files` table
-Stores file metadata and content (attachments + Drive files).
-
-| Column | Type | Description |
-|--------|------|-------------|
-| id | TEXT PK | `email_{uid}_{checksum}` or `gdrive_{id}` |
-| email_id | TEXT FK | Links to emails table |
-| name | TEXT | Filename |
-| mime_type | TEXT | MIME type |
-| source | TEXT | `email-gmail`, `gdrive` |
-| date | TEXT | ISO date |
-| size | TEXT | Human-readable size |
-| size_bytes | INTEGER | Size in bytes |
-| starred | INTEGER | 0 or 1 |
-| email_subject | TEXT | Parent email subject |
-| email_from | TEXT | Parent email sender |
-| has_content | INTEGER | 0 or 1 |
-| content | BLOB | Actual file bytes |
-
-### `activity` table
-Audit log of all user and sync actions.
-
-### `connections` table
-Tracks connected account status and last sync time.
-
-## Setup
-
-### Prerequisites
-- Node.js 22+
-- npm
-
-### Local Development
+## Quick Start (Local Dev)
 
 ```bash
-# Clone
 git clone https://github.com/Arkforge-Games/Accounting-Gdrive-Email.git
 cd Accounting-Gdrive-Email
-
-# Install
 npm install
-
-# Configure
-cp .env.local.example .env.local
-# Edit .env.local with your credentials
-
-# Run
+cp .env.local.example .env.local  # then edit credentials
 npm run dev -- -p 8325
 ```
 
-### Environment Variables
+Open http://localhost:8325
 
-```env
-# IMAP Email (Gmail)
-IMAP_HOST=imap.gmail.com
-IMAP_PORT=993
-IMAP_USER=your-email@gmail.com
-IMAP_PASSWORD=your-app-password    # Google App Password (not regular password)
-
-# Google Drive API (optional)
-GOOGLE_CLIENT_ID=
-GOOGLE_CLIENT_SECRET=
-GOOGLE_REDIRECT_URI=http://localhost:8325/api/auth/google/callback
-
-# App
-NEXTAUTH_URL=http://localhost:8325
-NEXTAUTH_SECRET=random-secret-string
-```
-
-> **Gmail App Password:** Go to Google Account > Security > 2-Step Verification > App Passwords. Create one for "Mail". Use the 16-character code as `IMAP_PASSWORD`.
-
-### Production Deployment (VM)
-
-The app runs on Azure VM `General-Agent` (74.226.88.89):
+## Production Deployment
 
 ```bash
-# SSH into VM or use az vm run-command
+ssh azureuser@74.226.88.89
 cd /opt/accounting-sync
-git pull origin master
-npm install
-npm run build
+sudo git pull origin master
+sudo npm install
+sudo npm run build
 sudo systemctl restart accounting-sync
 ```
 
-**systemd service:** `/etc/systemd/system/accounting-sync.service`
-**Port:** 8325 (UFW + Azure NSG open)
-**Nginx:** Reverse proxy configured
-**Database:** `/opt/accounting-sync/data/accounting.db`
+---
 
-## Project Structure
+## Automation Schedule
 
-```
-├── src/
-│   ├── app/
-│   │   ├── api/            # 17 API route handlers
-│   │   ├── dashboard/      # 7 dashboard pages
-│   │   ├── login/          # Login page
-│   │   ├── page.tsx        # Landing page
-│   │   ├── layout.tsx      # Root layout
-│   │   └── globals.css     # Tailwind imports
-│   ├── components/
-│   │   ├── icons/          # SVG icon components
-│   │   ├── ConnectionCard  # Account connection card
-│   │   ├── FilePreviewModal# File preview overlay
-│   │   ├── FileTable       # Sortable file table with actions
-│   │   ├── Sidebar         # Navigation sidebar
-│   │   ├── StatCard        # Dashboard stat card
-│   │   └── TopBar          # Page header with search
-│   └── lib/
-│       ├── cn.ts           # Tailwind class constants
-│       ├── db.ts           # SQLite database layer
-│       ├── google.ts       # Google OAuth client
-│       ├── imap.ts         # IMAP email fetcher
-│       ├── microsoft.ts    # Microsoft MSAL client
-│       ├── store.ts        # Legacy in-memory store
-│       └── types.ts        # TypeScript interfaces
-├── data/                   # SQLite database (gitignored)
-├── .env.local              # Credentials (gitignored)
-├── package.json
-├── tsconfig.json
-├── next.config.ts
-└── postcss.config.mjs
-```
+| When | What |
+|------|------|
+| **Hourly** (top of every hour) | Pipeline retry — processes failed/unrecorded files |
+| **Daily 6PM PHT** (10:00 UTC) | Full sync (Gmail + GDrive + Xero + Wise) → AI categorize → record to Sheets + Xero → enrich |
+
+Cron jobs configured at `/opt/accounting-sync/daily-sync.sh` and `hourly-retry.sh`.
+
+---
 
 ## License
 
-Private — Hobbyland Group
+Private — HobbyLand Technology Limited
