@@ -6,6 +6,8 @@ const MODEL = process.env.AI_MODEL || "qwen/qwen3.6-plus-preview:free";
 
 interface AICategorizeResult {
   category: CategoryKey;
+  sheetType: string | null;
+  paymentMethod: string | null;
   vendor: string | null;
   amount: string | null;
   currency: string | null;
@@ -105,21 +107,60 @@ Source: ${file.source}`;
 Respond with JSON:
 {
   "category": one of: "invoice", "bill", "receipt", "payroll", "tax", "bank_statement", "contract", "reimbursement", "permit", "quotation", "junk", "uncategorized",
-  "vendor": extracted vendor/company name or null,
+  "sheetType": one of: "Invoice", "Supplier", "CC", "Cash", "Reimbursement", "Freelancer", "Freelancer - Reimbursement", "Staff", "Payroll" — this maps to the expense sheet's Type column,
+  "paymentMethod": one of: "Andrea CC", "Credit Card", "Bank", "Cash", "Wise", "PayPal" — how it was paid,
+  "vendor": extracted vendor/company name (e.g. "Cloudflare, Inc."),
   "amount": total amount as string (e.g. "224.00") or null,
   "currency": "USD", "HKD", "PHP", "SGD", "MYR", "IDR", "EUR", "GBP" or null,
-  "description": one-line summary of what this document is (e.g. "Claude API subscription receipt for March 2026"),
+  "description": one-line summary (e.g. "Claude API subscription receipt for March 2026"),
   "confidence": "high", "medium", or "low"
 }
 
-Rules:
-- "junk" = email bounce notifications, delivery failure icons, tracking pixels, system emails, non-accounting files
-- "invoice" = sales invoices sent TO customers (accounts receivable)
-- "bill" = invoices received FROM suppliers (accounts payable)
+CRITICAL RULES (from accountant Andrea):
+
+CATEGORY:
+- "junk" = email bounces, delivery failures, tracking pixels, system emails
+- "invoice" = sales invoices SENT TO customers (accounts receivable, money coming IN)
+- "bill" = invoices/expenses FROM suppliers (accounts payable, money going OUT)
 - "receipt" = payment confirmations, OR receipts, transaction receipts
-- "reimbursement" = employee expense claims, reimbursement requests
-- "payroll" = salary slips, SSS/PhilHealth/Pag-IBIG, payroll sheets
-- If unsure, use "uncategorized"`;
+- "reimbursement" = employee/freelancer expense claims being repaid
+- "payroll" = ONLY for actual salary/SSS/PhilHealth/Pag-IBIG (employees, not freelancers)
+- "tax" = BIR forms, tax returns, withholding certificates
+- "bank_statement" = monthly bank statements
+
+SHEET TYPE (the most important field — Andrea's rules):
+- "Supplier" = ONLY traditional vendor invoices paid via bank transfer (NOT credit card)
+- "CC" = ANY expense charged to a credit card (Cloudflare, AWS, SaaS subscriptions, Google Ads)
+  → IMPORTANT: SaaS/cloud/online subscriptions are usually CC, not Supplier
+- "Cash" = paid in physical cash
+- "Reimbursement" = employee reimbursement (Andrea de Vera personal expenses)
+- "Freelancer" = freelancer/contractor payment (Jamie Bonsay, Jayvee, etc.) — NOT payroll
+- "Freelancer - Reimbursement" = freelancer reimbursing for something
+- "Staff" = staff/employee expense (NOT freelancer, NOT payroll)
+- "Payroll" = ONLY actual salary/wage payments to employees
+- "Invoice" = receivable invoice (money coming in)
+
+EXAMPLES:
+- "Cloudflare domain" → category=bill, sheetType=CC, paymentMethod="Credit Card"
+- "Jayvee blog reimbursement" → category=reimbursement, sheetType=Freelancer (NOT Payroll)
+- "Andrea reimbursement Anthropic" → category=reimbursement, sheetType=Reimbursement, paymentMethod="Andrea CC"
+- "Cathay Pacific flight ticket" → category=receipt, sheetType=Reimbursement (it's an expense to reimburse)
+- "Jamie Bonsay design payment" → category=reimbursement, sheetType=Freelancer
+- "Google Ads invoice" → category=bill, sheetType=CC, paymentMethod="Credit Card"
+
+CURRENCY:
+- Be careful with currency detection — look at the symbol AND the amount carefully
+- If you see "$" without context, default to USD unless the document is from HK (then HKD)
+- If you see "₱" or "PHP", that's Philippine Peso
+- If you see "HK$", that's Hong Kong Dollar
+
+PAYMENT METHOD:
+- "Andrea CC" = Andrea's personal credit card (used for reimbursements)
+- "Credit Card" = company credit card (used for CC expenses)
+- "Bank" = bank transfer (used for Supplier, Freelancer)
+- "Cash" = paid in cash
+
+If unsure, use "uncategorized" but try hard to match the rules above.`;
 
   return prompt;
 }
@@ -140,6 +181,8 @@ function parseAIResponse(content: string): AICategorizeResult {
 
     return {
       category: validCategories.includes(parsed.category) ? parsed.category : "uncategorized",
+      sheetType: parsed.sheetType || null,
+      paymentMethod: parsed.paymentMethod || null,
       vendor: parsed.vendor || null,
       amount: parsed.amount || null,
       currency: parsed.currency || null,
@@ -150,6 +193,8 @@ function parseAIResponse(content: string): AICategorizeResult {
     console.error("[AI] Failed to parse response:", content.substring(0, 200));
     return {
       category: "uncategorized",
+      sheetType: null,
+      paymentMethod: null,
       vendor: null,
       amount: null,
       currency: null,

@@ -40,5 +40,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(result);
   }
 
+  if (action === "reset-recorded") {
+    // Reset all files marked as "recorded" so they can be reprocessed with new AI prompt
+    // Deletes "record" entries from pipeline_log so getUnrecordedFiles() returns them again
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const dbAny = db as any;
+    const deleted = dbAny.getDb?.().prepare("DELETE FROM pipeline_log WHERE action = 'record'").run();
+    return NextResponse.json({ success: true, message: "Reset recorded status — files will be reprocessed on next pipeline run", deleted });
+  }
+
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });
 }

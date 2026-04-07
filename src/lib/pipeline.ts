@@ -93,6 +93,11 @@ export async function runPipeline(): Promise<PipelineResult> {
               });
               if (aiResult.amount) db.updateFileIndex(file.id, { amount: aiResult.amount, currency: aiResult.currency || undefined });
               if (aiResult.description) db.updateFileIndex(file.id, { notes: aiResult.description });
+              // Save AI's sheet type and payment method (Andrea's required fields)
+              if (aiResult.sheetType) db.updateFileIndex(file.id, { sheetType: aiResult.sheetType });
+              if (aiResult.paymentMethod) db.updateFileIndex(file.id, { paymentMethod: aiResult.paymentMethod });
+              // Flag low-confidence for human review
+              if (aiResult.confidence === "low") db.updateFileIndex(file.id, { needsReview: true, reviewNotes: "Low AI confidence" });
 
               file.category = aiResult.category;
               file.vendor = aiResult.vendor;
@@ -140,17 +145,21 @@ export async function runPipeline(): Promise<PipelineResult> {
 
         try {
           if (PAYABLE_CATEGORIES.has(file.category)) {
+            // Use AI's sheetType and paymentMethod if available, otherwise infer from category
+            const sheetType = file.sheetType || formatType(file.category);
+            const paymentMethod = file.paymentMethod || (file.category === "reimbursement" ? "Andrea CC" : "Bank");
+            const receiptLink = getReceiptLink(file);
             await appendPayableRow({
               jobDate: formatDate(file.date),
-              type: formatType(file.category),
-              receiptLink: file.downloadUrl ? `https://accounting.devehub.app${file.downloadUrl}` : "",
+              type: sheetType,
+              receiptLink,
               supplierName: file.vendor || "Unknown",
               invoiceNumber: file.referenceNo || "",
-              fullName: "",
+              fullName: file.category === "reimbursement" ? "Andrea de Vera" : "",
               jobDetails: file.notes || "",
               paymentAmount: file.amount ? `${file.currency} ${file.amount}` : "",
               paymentStatus: "Pending",
-              paymentMethod: file.category === "reimbursement" ? "Andrea CC" : "Bank",
+              paymentMethod,
               account: "HobbyLand",
               receiptCreated: "TRUE",
             });
@@ -178,15 +187,16 @@ export async function runPipeline(): Promise<PipelineResult> {
               }
             }
           } else if (RECEIVABLE_CATEGORIES.has(file.category)) {
+            const receiptLink = getReceiptLink(file);
             await appendReceivableRow({
               jobDate: formatDate(file.date),
               type: "Invoice",
-              receiptLink: file.downloadUrl ? `https://accounting.devehub.app${file.downloadUrl}` : "",
+              receiptLink,
               clientName: file.vendor || "Unknown",
               invoiceNumber: file.referenceNo || "",
               paymentAmount: file.amount ? `${file.currency} ${file.amount}` : "",
               paymentStatus: "Pending",
-              paymentMethod: "Bank",
+              paymentMethod: file.paymentMethod || "Bank",
               account: "HobbyLand",
               receiptCreated: "TRUE",
             });
@@ -281,6 +291,19 @@ function isDuplicate(
   }
 
   return false;
+}
+
+function getReceiptLink(file: db.IndexedFile): string {
+  // Google Drive files: use direct Drive link (no auth needed if shared)
+  if (file.source === "gdrive" && file.id.startsWith("gdrive_")) {
+    const driveId = file.id.replace("gdrive_", "");
+    return `https://drive.google.com/file/d/${driveId}/view`;
+  }
+  // Email attachments: use our public download endpoint
+  if (file.downloadUrl) {
+    return `https://accounting.devehub.app${file.downloadUrl}`;
+  }
+  return "";
 }
 
 function formatDate(dateStr: string): string {

@@ -113,6 +113,15 @@ function initSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_file_index_status ON file_index(status);
     CREATE INDEX IF NOT EXISTS idx_file_index_period ON file_index(period);
     CREATE INDEX IF NOT EXISTS idx_file_index_vendor ON file_index(vendor);
+  `);
+
+  // Migration: add sheet_type, payment_method, needs_review columns if not present
+  try { db.exec("ALTER TABLE file_index ADD COLUMN sheet_type TEXT"); } catch { /* exists */ }
+  try { db.exec("ALTER TABLE file_index ADD COLUMN payment_method TEXT"); } catch { /* exists */ }
+  try { db.exec("ALTER TABLE file_index ADD COLUMN needs_review INTEGER DEFAULT 0"); } catch { /* exists */ }
+  try { db.exec("ALTER TABLE file_index ADD COLUMN review_notes TEXT"); } catch { /* exists */ }
+
+  db.exec(`
 
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
@@ -590,6 +599,10 @@ export interface IndexedFile extends SyncFile {
   currency: string;
   referenceNo: string | null;
   autoCategorized: boolean;
+  sheetType?: string | null;
+  paymentMethod?: string | null;
+  needsReview?: boolean;
+  reviewNotes?: string | null;
 }
 
 export function upsertFileIndex(entry: {
@@ -641,10 +654,14 @@ export function updateFileIndex(fileId: string, updates: Partial<{
   amount: string;
   currency: string;
   referenceNo: string;
+  sheetType: string;
+  paymentMethod: string;
+  needsReview: boolean;
+  reviewNotes: string;
 }>) {
   const d = getDb();
   const sets: string[] = [];
-  const params: (string | null)[] = [];
+  const params: (string | number | null)[] = [];
 
   if (updates.category !== undefined) { sets.push("category = ?"); params.push(updates.category); }
   if (updates.status !== undefined) { sets.push("status = ?"); params.push(updates.status); }
@@ -654,6 +671,10 @@ export function updateFileIndex(fileId: string, updates: Partial<{
   if (updates.amount !== undefined) { sets.push("amount = ?"); params.push(updates.amount); }
   if (updates.currency !== undefined) { sets.push("currency = ?"); params.push(updates.currency); }
   if (updates.referenceNo !== undefined) { sets.push("reference_no = ?"); params.push(updates.referenceNo); }
+  if (updates.sheetType !== undefined) { sets.push("sheet_type = ?"); params.push(updates.sheetType); }
+  if (updates.paymentMethod !== undefined) { sets.push("payment_method = ?"); params.push(updates.paymentMethod); }
+  if (updates.needsReview !== undefined) { sets.push("needs_review = ?"); params.push(updates.needsReview ? 1 : 0); }
+  if (updates.reviewNotes !== undefined) { sets.push("review_notes = ?"); params.push(updates.reviewNotes); }
 
   if (sets.length === 0) return;
   sets.push("updated_at = datetime('now')");
@@ -675,7 +696,8 @@ export function getIndexedFiles(filters?: {
 }): IndexedFile[] {
   let sql = `
     SELECT f.*, fi.category, fi.status as accounting_status, fi.period, fi.notes,
-           fi.vendor, fi.amount, fi.currency, fi.reference_no, fi.auto_categorized
+           fi.vendor, fi.amount, fi.currency, fi.reference_no, fi.auto_categorized,
+           fi.sheet_type, fi.payment_method, fi.needs_review, fi.review_notes
     FROM files f
     LEFT JOIN file_index fi ON f.id = fi.file_id
     WHERE 1=1
@@ -720,6 +742,10 @@ export function getIndexedFiles(filters?: {
     currency: string | null;
     reference_no: string | null;
     auto_categorized: number | null;
+    sheet_type: string | null;
+    payment_method: string | null;
+    needs_review: number | null;
+    review_notes: string | null;
   })[];
 
   return rows.map((row) => ({
@@ -733,6 +759,10 @@ export function getIndexedFiles(filters?: {
     currency: row.currency || "PHP",
     referenceNo: row.reference_no,
     autoCategorized: row.auto_categorized === 1,
+    sheetType: row.sheet_type,
+    paymentMethod: row.payment_method,
+    needsReview: row.needs_review === 1,
+    reviewNotes: row.review_notes,
   }));
 }
 
