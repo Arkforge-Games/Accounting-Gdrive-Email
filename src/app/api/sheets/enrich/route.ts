@@ -33,10 +33,49 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ payable: payResult, receivable: recResult });
     }
 
-    return NextResponse.json({ error: "Unknown action. Use: enrich-payable, populate-receivable, all" }, { status: 400 });
+    if (action === "clear-reimbursement-debits") {
+      const result = await clearReimbursementDebits();
+      return NextResponse.json(result);
+    }
+
+    return NextResponse.json({ error: "Unknown action. Use: enrich-payable, populate-receivable, all, clear-reimbursement-debits" }, { status: 400 });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Unknown error" }, { status: 500 });
   }
+}
+
+async function clearReimbursementDebits(): Promise<{ cleared: number }> {
+  const sheets = getSheets();
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: "Payable!A1:R500",
+  });
+  const rows = res.data.values || [];
+  const updates: { range: string; values: string[][] }[] = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row || row.length === 0) continue;
+    const type = (row[1] || "").trim();
+    const debit = (row[16] || "").trim();
+    const isReimbursement = type === "Reimbursement" || type === "Freelancer - Reimbursement";
+
+    if (isReimbursement && debit) {
+      updates.push({ range: `Payable!Q${i + 1}`, values: [[""]] });
+    }
+  }
+
+  if (updates.length > 0) {
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId: SPREADSHEET_ID,
+      requestBody: {
+        valueInputOption: "USER_ENTERED",
+        data: updates,
+      },
+    });
+  }
+
+  return { cleared: updates.length };
 }
 
 async function enrichPayable(): Promise<{ updated: number; details: string[] }> {
@@ -180,7 +219,10 @@ async function enrichPayable(): Promise<{ updated: number; details: string[] }> 
     }
 
     // Q: Debit — parse amount to number
-    if (!debit && amount) {
+    // SKIP for reimbursements (Andrea's rule): the cost is already added to the reimbursee's salary,
+    // putting it in Debit column would double-count the expense
+    const isReimbursement = type === "Reimbursement" || type === "Freelancer - Reimbursement";
+    if (!debit && amount && !isReimbursement) {
       const parsed = parseAmount(amount);
       if (parsed) {
         updates.push({ range: `Payable!Q${rowNum}`, values: [[parsed.value.toFixed(2)]] });
