@@ -181,6 +181,15 @@ export async function POST(req: NextRequest) {
         if (result.description) {
           db.updateFileIndex(file.id, { notes: result.description });
         }
+        if (result.sheetType) {
+          db.updateFileIndex(file.id, { sheetType: result.sheetType });
+        }
+        if (result.paymentMethod) {
+          db.updateFileIndex(file.id, { paymentMethod: result.paymentMethod });
+        }
+        if (result.confidence === "low") {
+          db.updateFileIndex(file.id, { needsReview: true, reviewNotes: "Low AI confidence" });
+        }
 
         processed++;
       } catch (err) {
