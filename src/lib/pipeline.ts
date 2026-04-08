@@ -11,7 +11,6 @@ import * as db from "./db";
 import { categorizeFile, extractAmountFromBody } from "./categorize";
 import { isAIConfigured, aiCategorizeFile } from "./ai-categorize";
 import { appendPayableRow, appendReceivableRow, getPayables, getReceivables } from "./sheets";
-import { isXeroConnected, createBill, createInvoice } from "./xero";
 
 /** Sleep helper to throttle Google Sheets writes (max 60/min) */
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -200,25 +199,9 @@ export async function runPipeline(): Promise<PipelineResult> {
             result.recorded++;
             await sleep(1200); // Throttle: max ~50 writes/min to stay under Google Sheets 60/min limit
 
-            // Auto-create Xero bill (DRAFT) for payable items with amount
-            if (isXeroConnected() && file.amount && parseFloat(file.amount) > 0) {
-              try {
-                const amt = parseFloat(file.amount);
-                const cur = mapCurrency(file.currency);
-                await createBill({
-                  contactName: file.vendor || "Unknown Supplier",
-                  date: file.date ? new Date(file.date).toISOString().split("T")[0] : new Date().toISOString().split("T")[0],
-                  description: file.notes || `${file.category}: ${file.name}`,
-                  amount: amt,
-                  currencyCode: cur,
-                  invoiceNumber: file.referenceNo || undefined,
-                });
-                db.logPipeline({ runId, fileId: file.id, action: "xero_bill", status: "success", result: "DRAFT", details: `${file.vendor} ${cur} ${amt}` });
-                result.xeroCreated++;
-              } catch (err) {
-                db.logPipeline({ runId, fileId: file.id, action: "xero_bill", status: "error", error: err instanceof Error ? err.message : "Xero write failed" });
-              }
-            }
+            // Xero bill creation DISABLED per Andrea (2026-04-07): "We don't need to
+            // create any bills or invoices, only reconciliation for now."
+            // Pipeline records to Google Sheets only; Xero is read-only for now.
           } else if (RECEIVABLE_CATEGORIES.has(file.category)) {
             const receiptLink = getReceiptLink(file);
             await appendReceivableRow({
@@ -237,25 +220,8 @@ export async function runPipeline(): Promise<PipelineResult> {
             result.recorded++;
             await sleep(1200); // Throttle Google Sheets writes
 
-            // Auto-create Xero invoice (DRAFT) for receivable items
-            if (isXeroConnected() && file.amount && parseFloat(file.amount) > 0) {
-              try {
-                const amt = parseFloat(file.amount);
-                const cur = mapCurrency(file.currency);
-                await createInvoice({
-                  contactName: file.vendor || "Unknown Client",
-                  date: file.date ? new Date(file.date).toISOString().split("T")[0] : new Date().toISOString().split("T")[0],
-                  description: file.notes || `${file.category}: ${file.name}`,
-                  amount: amt,
-                  currencyCode: cur,
-                  invoiceNumber: file.referenceNo || undefined,
-                });
-                db.logPipeline({ runId, fileId: file.id, action: "xero_invoice", status: "success", result: "DRAFT", details: `${file.vendor} ${cur} ${amt}` });
-                result.xeroCreated++;
-              } catch (err) {
-                db.logPipeline({ runId, fileId: file.id, action: "xero_invoice", status: "error", error: err instanceof Error ? err.message : "Xero write failed" });
-              }
-            }
+            // Xero invoice creation DISABLED per Andrea (2026-04-07): "We don't need to
+            // create any bills or invoices, only reconciliation for now."
           } else {
             db.logPipeline({ runId, fileId: file.id, action: "record", status: "skipped", details: `Unhandled category: ${file.category}` });
             result.skipped++;
