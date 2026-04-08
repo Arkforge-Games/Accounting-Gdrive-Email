@@ -6,11 +6,31 @@
  *
  * POST /api/admin/clear-broken-rows
  */
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { google } from "googleapis";
 import { getAuthenticatedClient } from "@/lib/google";
 
 const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID || "1gCGR0fEruEdwVNe2qx9U2hAb7cIqjWcMHVae_iH_MsE";
+
+// GET /api/admin/clear-broken-rows?from=182&to=200 — clear an explicit range
+export async function GET(req: NextRequest) {
+  try {
+    const from = parseInt(req.nextUrl.searchParams.get("from") || "0", 10);
+    const to = parseInt(req.nextUrl.searchParams.get("to") || "0", 10);
+    if (!from || !to || from > to) {
+      return NextResponse.json({ error: "from and to query params required" }, { status: 400 });
+    }
+    const auth = getAuthenticatedClient();
+    const sheets = google.sheets({ version: "v4", auth });
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Payable!A${from}:R${to}`,
+    });
+    return NextResponse.json({ cleared: to - from + 1, range: `${from}-${to}` });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Unknown" }, { status: 500 });
+  }
+}
 
 export async function POST() {
   try {
