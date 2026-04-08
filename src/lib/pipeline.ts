@@ -114,26 +114,27 @@ export async function runPipeline(): Promise<PipelineResult> {
       }
     }
 
-    // ===== PHASE 2: Group by transaction-identity, NOT just by email =====
-    // Two files belong to the same transaction iff:
-    //   - same emailId (came from the same forwarded email)
-    //   - same vendor
-    //   - same amount
-    // 19 different Cloudflare receipts in one email = 19 different transactions
-    // (different amounts), so they each get their own row. A reimbursement
-    // email with 1 invoice + 1 receipt for the same Vercel charge = 1 row.
-    const groups = groupByTransaction(unrecorded);
+    // ===== PHASE 2: Write one row per file, with in-run dedupe =====
+    //
+    // We do NOT group files at all. Why: we can't reliably distinguish
+    // "1 invoice + 1 receipt for the same Vercel charge" (should merge)
+    // from "9 different monthly Cloudflare charges, all $10.46" (must NOT
+    // merge) without parsing PDF content for invoice numbers and dates.
+    //
+    // Trade-off: 1 invoice + 1 receipt for the same transaction will
+    // produce 2 rows. Andrea can manually merge if she wants. Better to
+    // have correct atomic rows than to silently lose data.
+    //
+    // The in-run dedupe set catches the obvious case of two files with
+    // identical (vendor, amount, date) being written in the same run.
+    const writtenInRun = new Set<string>();
 
-    // ===== PHASE 3: Write one row per transaction group =====
-    for (const group of groups) {
-      const file = group[0];
-      const siblings = group.slice(1);
+    for (const file of unrecorded) {
       try {
 
         // Skip categories that shouldn't be recorded
         if (SKIP_CATEGORIES.has(file.category)) {
           db.logPipeline({ runId, fileId: file.id, action: "record", status: "skipped", details: `Category: ${file.category}` });
-          for (const sib of siblings) db.logPipeline({ runId, fileId: sib.id, action: "record", status: "skipped", details: `Sibling of ${file.id}; category: ${file.category}` });
           result.skipped++;
           continue;
         }
@@ -141,7 +142,16 @@ export async function runPipeline(): Promise<PipelineResult> {
         // Check for duplicates against existing sheet rows
         if (isDuplicate(file, existingPayables, existingReceivables)) {
           db.logPipeline({ runId, fileId: file.id, action: "record", status: "duplicate", details: `Duplicate detected: ${file.vendor} ${file.amount}` });
-          for (const sib of siblings) db.logPipeline({ runId, fileId: sib.id, action: "record", status: "duplicate", details: `Sibling of ${file.id}; duplicate` });
+          result.duplicates++;
+          continue;
+        }
+
+        // In-run dedupe: catch when two files in the same run resolve to the
+        // same (vendor, amount, date) triple (e.g. invoice + receipt for the
+        // same transaction). The first wins, the second is logged as duplicate.
+        const runKey = `${(file.vendor || "").toLowerCase().trim()}|${(file.amount || "").trim()}|${(file.date || "").substring(0, 10)}`;
+        if (file.vendor && file.amount && writtenInRun.has(runKey)) {
+          db.logPipeline({ runId, fileId: file.id, action: "record", status: "duplicate", details: `In-run duplicate: ${file.vendor} ${file.amount} on ${file.date?.substring(0, 10)}` });
           result.duplicates++;
           continue;
         }
@@ -154,17 +164,11 @@ export async function runPipeline(): Promise<PipelineResult> {
         if (missing.length > 0) {
           db.updateFileIndex(file.id, { needsReview: true, reviewNotes: `Missing required fields: ${missing.join(", ")}` });
           db.logPipeline({ runId, fileId: file.id, action: "record", status: "needs_review", details: `Missing: ${missing.join(", ")}` });
-          for (const sib of siblings) {
-            db.updateFileIndex(sib.id, { needsReview: true, reviewNotes: `Missing required fields: ${missing.join(", ")}` });
-            db.logPipeline({ runId, fileId: sib.id, action: "record", status: "needs_review", details: `Sibling of ${file.id}; missing: ${missing.join(", ")}` });
-          }
           result.skipped++;
           continue;
         }
 
-        // Build the receipt link cell — concatenate all attachment links from this group
-        const allLinks = [file, ...siblings].map(getReceiptLink).filter(Boolean);
-        const receiptLink = allLinks.join("\n");
+        const receiptLink = getReceiptLink(file);
 
         try {
           if (PAYABLE_CATEGORIES.has(file.category)) {
@@ -205,11 +209,8 @@ export async function runPipeline(): Promise<PipelineResult> {
               account: "HobbyLand",
               receiptCreated: "TRUE",
             });
-            db.logPipeline({ runId, fileId: file.id, action: "record", status: "success", result: "payable", details: `${file.vendor} ${file.currency} ${file.amount}${siblings.length > 0 ? ` (+${siblings.length} attachments)` : ""}` });
-            // Mark all siblings as recorded so they don't reprocess
-            for (const sib of siblings) {
-              db.logPipeline({ runId, fileId: sib.id, action: "record", status: "success", result: "payable", details: `Merged into row for ${file.id}` });
-            }
+            db.logPipeline({ runId, fileId: file.id, action: "record", status: "success", result: "payable", details: `${file.vendor} ${file.currency} ${file.amount}` });
+            writtenInRun.add(runKey);
             result.recorded++;
             await sleep(1200); // Throttle: max ~50 writes/min to stay under Google Sheets 60/min limit
 
@@ -229,10 +230,8 @@ export async function runPipeline(): Promise<PipelineResult> {
               account: "HobbyLand",
               receiptCreated: "TRUE",
             });
-            db.logPipeline({ runId, fileId: file.id, action: "record", status: "success", result: "receivable", details: `${file.vendor} ${file.currency} ${file.amount}${siblings.length > 0 ? ` (+${siblings.length} attachments)` : ""}` });
-            for (const sib of siblings) {
-              db.logPipeline({ runId, fileId: sib.id, action: "record", status: "success", result: "receivable", details: `Merged into row for ${file.id}` });
-            }
+            db.logPipeline({ runId, fileId: file.id, action: "record", status: "success", result: "receivable", details: `${file.vendor} ${file.currency} ${file.amount}` });
+            writtenInRun.add(runKey);
             result.recorded++;
             await sleep(1200); // Throttle Google Sheets writes
 
@@ -325,59 +324,6 @@ function formatDate(dateStr: string): string {
   if (!dateStr) return "";
   const d = new Date(dateStr);
   return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
-}
-
-/**
- * Group files by LOGICAL TRANSACTION, not just by source email.
- *
- * Two files belong to the same transaction iff ALL of:
- *   - same emailId (came from the same forwarded email)
- *   - same vendor (after normalization)
- *   - same amount
- *
- * This correctly handles both:
- *   - Vercel reimbursement: 1 invoice + 1 receipt PDF, same vendor + amount
- *     → ONE row with both attachment links
- *   - Bulk Cloudflare receipts: 19 PDFs in one email, different amounts
- *     → 19 separate rows
- *
- * Files without an emailId (gdrive uploads, manual uploads) always go
- * into singleton groups.
- */
-function groupByTransaction(files: db.IndexedFile[]): db.IndexedFile[][] {
-  const groups = new Map<string, db.IndexedFile[]>();
-  const standalone: db.IndexedFile[][] = [];
-
-  for (const f of files) {
-    if (!f.emailId) {
-      standalone.push([f]);
-      continue;
-    }
-    const vendorKey = (f.vendor || "").toLowerCase().trim();
-    const amountKey = (f.amount || "").trim();
-    // No vendor or amount yet → can't safely merge with anything → standalone
-    if (!vendorKey || !amountKey) {
-      standalone.push([f]);
-      continue;
-    }
-    const key = `${f.emailId}|${vendorKey}|${amountKey}`;
-    const existing = groups.get(key);
-    if (existing) existing.push(f);
-    else groups.set(key, [f]);
-  }
-
-  // Sort each group so the file with the most extracted data comes first
-  const result: db.IndexedFile[][] = [];
-  for (const group of groups.values()) {
-    group.sort((a, b) => {
-      const aScore = (a.amount ? 4 : 0) + (a.vendor ? 2 : 0) + (a.date ? 1 : 0);
-      const bScore = (b.amount ? 4 : 0) + (b.vendor ? 2 : 0) + (b.date ? 1 : 0);
-      return bScore - aScore;
-    });
-    result.push(group);
-  }
-  result.push(...standalone);
-  return result;
 }
 
 /**
