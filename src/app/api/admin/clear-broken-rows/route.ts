@@ -18,13 +18,14 @@ export async function POST() {
     const sheets = google.sheets({ version: "v4", auth });
 
     // Read columns A and P from the data range
-    const res = await sheets.spreadsheets.values.get({
+    const res = await sheets.spreadsheets.values.batchGet({
       spreadsheetId: SPREADSHEET_ID,
       ranges: ["Payable!A9:A500", "Payable!P9:P500"],
-    } as { spreadsheetId: string; ranges: string[] }) as unknown as { data: { valueRanges: { values?: string[][] }[] } };
+    });
 
-    const colA = res.data.valueRanges[0].values || [];
-    const colP = res.data.valueRanges[1].values || [];
+    const valueRanges = res.data.valueRanges || [];
+    const colA = valueRanges[0]?.values || [];
+    const colP = valueRanges[1]?.values || [];
 
     // Find broken rows: column A empty, column P contains a date
     const brokenRows: number[] = [];
