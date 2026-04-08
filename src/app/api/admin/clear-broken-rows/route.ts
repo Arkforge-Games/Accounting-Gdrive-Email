@@ -1,0 +1,62 @@
+/**
+ * One-shot cleanup endpoint to clear rows that were corrupted by the
+ * pre-fix values.append() bug (data shifted 15 columns right). Safe to
+ * leave in place — only clears rows where column A is empty AND column
+ * P contains a date-like string (the exact signature of the bug).
+ *
+ * POST /api/admin/clear-broken-rows
+ */
+import { NextResponse } from "next/server";
+import { google } from "googleapis";
+import { getAuthenticatedClient } from "@/lib/google";
+
+const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID || "1gCGR0fEruEdwVNe2qx9U2hAb7cIqjWcMHVae_iH_MsE";
+
+export async function POST() {
+  try {
+    const auth = getAuthenticatedClient();
+    const sheets = google.sheets({ version: "v4", auth });
+
+    // Read columns A and P from the data range
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      ranges: ["Payable!A9:A500", "Payable!P9:P500"],
+    } as { spreadsheetId: string; ranges: string[] }) as unknown as { data: { valueRanges: { values?: string[][] }[] } };
+
+    const colA = res.data.valueRanges[0].values || [];
+    const colP = res.data.valueRanges[1].values || [];
+
+    // Find broken rows: column A empty, column P contains a date
+    const brokenRows: number[] = [];
+    const len = Math.max(colA.length, colP.length);
+    for (let i = 0; i < len; i++) {
+      const a = (colA[i]?.[0] || "").trim();
+      const p = (colP[i]?.[0] || "").trim();
+      if (!a && p && /20\d{2}/.test(p)) {
+        brokenRows.push(9 + i); // actual sheet row (1-based, range starts at row 9)
+      }
+    }
+
+    if (brokenRows.length === 0) {
+      return NextResponse.json({ cleared: 0, message: "No broken rows found" });
+    }
+
+    // Clear them in one batch
+    const ranges = brokenRows.map((r) => `Payable!A${r}:R${r}`);
+    await sheets.spreadsheets.values.batchClear({
+      spreadsheetId: SPREADSHEET_ID,
+      requestBody: { ranges },
+    });
+
+    return NextResponse.json({
+      cleared: brokenRows.length,
+      rows: brokenRows,
+      message: `Cleared ${brokenRows.length} broken rows`,
+    });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      { status: 500 }
+    );
+  }
+}
