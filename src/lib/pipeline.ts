@@ -197,6 +197,7 @@ export async function runPipeline(): Promise<PipelineResult> {
             file.category = finalCategory;
             file.vendor = aiResult.vendor || file.vendor;
             file.amount = aiResult.amount || file.amount;
+            if (aiResult.currency) file.currency = aiResult.currency;
             result.aiCategorized++;
             db.logPipeline({ runId, fileId: file.id, action: "categorize_ai", status: "success", result: finalCategory, details: aiResult.description || (categoryWasLocked ? `Extraction only (category locked: ${finalCategory})` : undefined) });
           } catch (err) {
@@ -417,8 +418,12 @@ function formatDate(dateStr: string): string {
  * Group unrecorded files by source email so multi-attachment emails produce
  * a single Sheet row instead of one row per PDF.
  *
- * Grouping key: lowercased emailSubject + emailFrom. Files without an email
- * source (gdrive uploads, manual uploads) get their own group of size 1.
+ * PRIMARY key: emailId (from files.email_id). This is the only correct way
+ * to identify "attachments of the same message" — same subject from same
+ * sender on the same day can still be 18 different forwarded receipts.
+ *
+ * Files without an emailId (gdrive uploads, manual uploads) get their own
+ * group of size 1.
  *
  * Within each email group, the file with the most data (amount > vendor > date)
  * is moved to the front so it becomes the "representative" used for classification
@@ -429,20 +434,14 @@ function groupByEmail(files: db.IndexedFile[]): db.IndexedFile[][] {
   const standalone: db.IndexedFile[][] = [];
 
   for (const f of files) {
-    const subj = (f.emailSubject || "").trim().toLowerCase();
-    const from = (f.emailFrom || "").trim().toLowerCase();
-    if (!subj && !from) {
+    if (!f.emailId) {
+      // No email source (gdrive, upload) — process alone
       standalone.push([f]);
       continue;
     }
-    // Include the date (day-precision) in the key so two separate emails from
-    // the same vendor with identical subjects on different days don't merge.
-    // Email attachments from a single message all share the same date.
-    const day = (f.date || "").substring(0, 10);
-    const key = `${subj}|${from}|${day}`;
-    const existing = groups.get(key);
+    const existing = groups.get(f.emailId);
     if (existing) existing.push(f);
-    else groups.set(key, [f]);
+    else groups.set(f.emailId, [f]);
   }
 
   // Sort each group so the file with the most extracted data comes first

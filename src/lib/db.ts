@@ -625,6 +625,7 @@ export interface IndexedFile extends SyncFile {
   paymentMethod?: string | null;
   needsReview?: boolean;
   reviewNotes?: string | null;
+  emailId?: string | null;
 }
 
 export function upsertFileIndex(entry: {
@@ -717,7 +718,7 @@ export function getIndexedFiles(filters?: {
   search?: string;
 }): IndexedFile[] {
   let sql = `
-    SELECT f.*, fi.category, fi.status as accounting_status, fi.period, fi.notes,
+    SELECT f.*, f.email_id, fi.category, fi.status as accounting_status, fi.period, fi.notes,
            fi.vendor, fi.amount, fi.currency, fi.reference_no, fi.auto_categorized,
            fi.sheet_type, fi.payment_method, fi.needs_review, fi.review_notes
     FROM files f
@@ -755,6 +756,7 @@ export function getIndexedFiles(filters?: {
   sql += " ORDER BY f.date DESC";
 
   const rows = getDb().prepare(sql).all(...params) as (DbFile & {
+    email_id: string | null;
     category: string | null;
     accounting_status: string | null;
     period: string | null;
@@ -785,6 +787,7 @@ export function getIndexedFiles(filters?: {
     paymentMethod: row.payment_method,
     needsReview: row.needs_review === 1,
     reviewNotes: row.review_notes,
+    emailId: row.email_id,
   }));
 }
 
