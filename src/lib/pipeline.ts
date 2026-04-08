@@ -169,15 +169,26 @@ export async function runPipeline(): Promise<PipelineResult> {
         try {
           if (PAYABLE_CATEGORIES.has(file.category)) {
             // Determine sheetType. Order of precedence:
-            //  1. Subject override already set sheetType (reimbursement) → keep it
-            //  2. Known SaaS/CC vendor → "CC" (overrides AI/rule; Cloudflare/GitHub/etc)
+            //  1. Reimbursement category → use file.sheetType (Reimbursement or Freelancer)
+            //     set by the subject override; never CC even for SaaS reimbursements
+            //  2. Known SaaS/CC vendor → ALWAYS "CC" (Andrea's rule — overrides any
+            //     AI or rule-based sheetType, since the AI sometimes still picks
+            //     "Supplier" for Cloudflare/GitHub/etc even though they're auto-billed)
             //  3. AI's explicit sheetType (already validated, "Receipt" → "CC")
             //  4. Fallback formatType from category
             const isCC = file.category !== "reimbursement" && isSaasCcVendor(file);
-            const sheetType = file.sheetType
-              || (isCC ? "CC" : formatType(file.category));
-            const paymentMethod = file.paymentMethod
-              || (isCC ? "Credit Card" : (file.category === "reimbursement" ? "Andrea CC" : "Bank"));
+            let sheetType: string;
+            let paymentMethod: string;
+            if (file.category === "reimbursement") {
+              sheetType = file.sheetType || "Reimbursement";
+              paymentMethod = file.paymentMethod || "Andrea CC";
+            } else if (isCC) {
+              sheetType = "CC";
+              paymentMethod = "Credit Card";
+            } else {
+              sheetType = file.sheetType || formatType(file.category);
+              paymentMethod = file.paymentMethod || "Bank";
+            }
             await appendPayableRow({
               jobDate: formatDate(file.date),
               type: sheetType,
