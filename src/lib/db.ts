@@ -954,9 +954,11 @@ export function getFileRecordingStatus(fileId: string): string {
 }
 
 export function getUnrecordedFiles(): IndexedFile[] {
-  // Files that have been categorized but not yet recorded to sheets
+  // Files already handled by the pipeline (any terminal status). Includes
+  // 'needs_review' so files flagged for human review don't reprocess every
+  // hour — Andrea fixes them manually and clicks "reprocess" if she wants.
   const recorded = getDb().prepare(
-    "SELECT DISTINCT file_id FROM pipeline_log WHERE action = 'record' AND status IN ('success', 'duplicate', 'skipped')"
+    "SELECT DISTINCT file_id FROM pipeline_log WHERE action = 'record' AND status IN ('success', 'duplicate', 'skipped', 'needs_review')"
   ).all() as { file_id: string }[];
   const recordedIds = new Set(recorded.map(r => r.file_id));
 

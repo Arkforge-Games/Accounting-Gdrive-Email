@@ -118,6 +118,9 @@ export async function runPipeline(): Promise<PipelineResult> {
         if (subjectLower.includes("reimburs") && file.category !== "reimbursement") {
           const freelancerMatch = (file.emailSubject || "").match(/jamie|jayvee|\bjm\b|murphy|aarati/i);
           const isFreelancer = !!freelancerMatch;
+          const freelancerName = freelancerMatch
+            ? freelancerMatch[0].charAt(0).toUpperCase() + freelancerMatch[0].slice(1).toLowerCase()
+            : null;
           const sheetType = isFreelancer ? "Freelancer" : "Reimbursement";
           const paymentMethod = isFreelancer ? "Bank" : "Andrea CC";
           db.upsertFileIndex({
@@ -130,73 +133,97 @@ export async function runPipeline(): Promise<PipelineResult> {
           file.category = "reimbursement";
           file.sheetType = sheetType;
           file.paymentMethod = paymentMethod;
+          // Stash the recipient name on the file object so the row writer can use it
+          (file as db.IndexedFile & { reimbursementRecipient?: string }).reimbursementRecipient = freelancerName || "Andrea de Vera";
           result.categorized++;
-          db.logPipeline({ runId, fileId: file.id, action: "categorize_subject_override", status: "success", result: "reimbursement", details: `Subject contained "reimburs"; sheetType=${sheetType}` });
+          db.logPipeline({ runId, fileId: file.id, action: "categorize_subject_override", status: "success", result: "reimbursement", details: `Subject contained "reimburs"; sheetType=${sheetType}; recipient=${freelancerName || "Andrea de Vera"}` });
         }
 
-        // 2a: Ensure categorized
-        if (file.category === "uncategorized" || !file.category) {
-          // Try rule-based first
+        // 2a: Run rule-based categorize. If a subject override already locked
+        // the category (e.g. reimbursement), KEEP that category but still use
+        // the rule-based pass for vendor extraction.
+        const categoryWasLocked = file.category === "reimbursement" || file.category === "payroll";
+        if (file.category === "uncategorized" || !file.category || (categoryWasLocked && !file.vendor)) {
           const ruleResult = categorizeFile(file);
-          if (ruleResult.category !== "uncategorized") {
+          const newCategory = categoryWasLocked ? file.category : ruleResult.category;
+          const newVendor = file.vendor || ruleResult.vendor;
+          if (newCategory !== "uncategorized" || newVendor) {
             db.upsertFileIndex({
-              fileId: file.id, category: ruleResult.category, period: ruleResult.period,
-              vendor: ruleResult.vendor || undefined, autoCategorized: true,
+              fileId: file.id, category: newCategory, period: ruleResult.period,
+              vendor: newVendor || undefined, autoCategorized: true,
             });
-            file.category = ruleResult.category;
-            file.vendor = ruleResult.vendor;
+            file.category = newCategory;
+            file.vendor = newVendor;
             result.categorized++;
-            db.logPipeline({ runId, fileId: file.id, action: "categorize_rule", status: "success", result: ruleResult.category });
-          } else if (isAIConfigured()) {
-            // Try AI categorize
-            try {
-              const emailBody = db.getEmailBodyForFile(file.id);
-              let pdfText: string | null = null;
-              if (file.mimeType.includes("pdf")) {
-                try {
-                  const fileData = db.getFileContent(file.id);
-                  if (fileData) {
-                    // eslint-disable-next-line @typescript-eslint/no-require-imports
-                    const pdfParse = require("pdf-parse");
-                    const parsed = await pdfParse(Buffer.from(fileData.content));
-                    pdfText = parsed.text || null;
-                  }
-                } catch { /* skip pdf parse errors */ }
-              }
-
-              const aiResult = await aiCategorizeFile(file, emailBody, pdfText);
-              db.upsertFileIndex({
-                fileId: file.id, category: aiResult.category, period: file.date?.substring(0, 7),
-                vendor: aiResult.vendor || undefined, autoCategorized: true,
-              });
-              if (aiResult.amount) db.updateFileIndex(file.id, { amount: aiResult.amount, currency: aiResult.currency || undefined });
-              if (aiResult.description) db.updateFileIndex(file.id, { notes: aiResult.description });
-              // Save AI's sheet type and payment method (Andrea's required fields)
-              if (aiResult.sheetType) db.updateFileIndex(file.id, { sheetType: aiResult.sheetType });
-              if (aiResult.paymentMethod) db.updateFileIndex(file.id, { paymentMethod: aiResult.paymentMethod });
-              // Flag low-confidence for human review
-              if (aiResult.confidence === "low") db.updateFileIndex(file.id, { needsReview: true, reviewNotes: "Low AI confidence" });
-
-              file.category = aiResult.category;
-              file.vendor = aiResult.vendor;
-              file.amount = aiResult.amount;
-              result.aiCategorized++;
-              db.logPipeline({ runId, fileId: file.id, action: "categorize_ai", status: "success", result: aiResult.category, details: aiResult.description || undefined });
-            } catch (err) {
-              db.logPipeline({ runId, fileId: file.id, action: "categorize_ai", status: "error", error: err instanceof Error ? err.message : "AI failed" });
-            }
+            db.logPipeline({ runId, fileId: file.id, action: "categorize_rule", status: "success", result: newCategory, details: categoryWasLocked ? `Vendor only (category locked: ${newCategory})` : undefined });
           }
         }
 
-        // 2b: Extract amount if missing
+        // 2a-bis: Run AI if still uncategorized OR if a locked category is
+        // missing vendor/amount and we have a PDF to parse. The AI is the most
+        // reliable extractor of vendor + amount from PDF text.
+        const needsExtraction = (file.category === "uncategorized") ||
+          (categoryWasLocked && (!file.vendor || !file.amount) && file.mimeType.includes("pdf"));
+        if (needsExtraction && isAIConfigured()) {
+          try {
+            const emailBody = db.getEmailBodyForFile(file.id);
+            let pdfText: string | null = null;
+            if (file.mimeType.includes("pdf")) {
+              try {
+                const fileData = db.getFileContent(file.id);
+                if (fileData) {
+                  // eslint-disable-next-line @typescript-eslint/no-require-imports
+                  const pdfParse = require("pdf-parse");
+                  const parsed = await pdfParse(Buffer.from(fileData.content));
+                  pdfText = parsed.text || null;
+                }
+              } catch { /* skip pdf parse errors */ }
+            }
+
+            const aiResult = await aiCategorizeFile(file, emailBody, pdfText);
+            // If category was locked by subject override, keep it. Otherwise adopt AI's.
+            const finalCategory = categoryWasLocked ? file.category : aiResult.category;
+            db.upsertFileIndex({
+              fileId: file.id, category: finalCategory, period: file.date?.substring(0, 7),
+              vendor: aiResult.vendor || file.vendor || undefined, autoCategorized: true,
+            });
+            if (aiResult.amount) db.updateFileIndex(file.id, { amount: aiResult.amount, currency: aiResult.currency || undefined });
+            if (aiResult.description) db.updateFileIndex(file.id, { notes: aiResult.description });
+            // Only adopt AI's sheetType/paymentMethod if not already locked by subject override
+            if (aiResult.sheetType && !file.sheetType) db.updateFileIndex(file.id, { sheetType: aiResult.sheetType });
+            if (aiResult.paymentMethod && !file.paymentMethod) db.updateFileIndex(file.id, { paymentMethod: aiResult.paymentMethod });
+            if (aiResult.confidence === "low") db.updateFileIndex(file.id, { needsReview: true, reviewNotes: "Low AI confidence" });
+
+            file.category = finalCategory;
+            file.vendor = aiResult.vendor || file.vendor;
+            file.amount = aiResult.amount || file.amount;
+            result.aiCategorized++;
+            db.logPipeline({ runId, fileId: file.id, action: "categorize_ai", status: "success", result: finalCategory, details: aiResult.description || (categoryWasLocked ? `Extraction only (category locked: ${finalCategory})` : undefined) });
+          } catch (err) {
+            db.logPipeline({ runId, fileId: file.id, action: "categorize_ai", status: "error", error: err instanceof Error ? err.message : "AI failed" });
+          }
+        }
+
+        // 2b: Extract amount if missing — try email body first, then PDF text
         if (!file.amount && file.category !== "junk") {
           const emailBody = db.getEmailBodyForFile(file.id);
-          if (emailBody) {
-            const extracted = extractAmountFromBody(emailBody);
-            if (extracted) {
-              db.updateFileIndex(file.id, { amount: extracted.amount, currency: extracted.currency });
-              file.amount = extracted.amount;
-            }
+          let extracted = emailBody ? extractAmountFromBody(emailBody) : null;
+          // Fall back to PDF text if email body didn't yield an amount
+          if (!extracted && file.mimeType.includes("pdf")) {
+            try {
+              const fileData = db.getFileContent(file.id);
+              if (fileData) {
+                // eslint-disable-next-line @typescript-eslint/no-require-imports
+                const pdfParse = require("pdf-parse");
+                const parsed = await pdfParse(Buffer.from(fileData.content));
+                if (parsed.text) extracted = extractAmountFromBody(parsed.text);
+              }
+            } catch { /* skip pdf parse errors */ }
+          }
+          if (extracted) {
+            db.updateFileIndex(file.id, { amount: extracted.amount, currency: extracted.currency });
+            file.amount = extracted.amount;
+            file.currency = extracted.currency;
           }
         }
 
@@ -254,7 +281,9 @@ export async function runPipeline(): Promise<PipelineResult> {
               receiptLink,
               supplierName: file.vendor || "Unknown",
               invoiceNumber: file.referenceNo || "",
-              fullName: file.category === "reimbursement" ? "Andrea de Vera" : "",
+              fullName: file.category === "reimbursement"
+                ? ((file as db.IndexedFile & { reimbursementRecipient?: string }).reimbursementRecipient || "Andrea de Vera")
+                : "",
               jobDetails: file.notes || "",
               paymentAmount: file.amount ? `${file.currency} ${file.amount}` : "",
               paymentStatus: "Pending",
@@ -406,7 +435,11 @@ function groupByEmail(files: db.IndexedFile[]): db.IndexedFile[][] {
       standalone.push([f]);
       continue;
     }
-    const key = `${subj}|${from}`;
+    // Include the date (day-precision) in the key so two separate emails from
+    // the same vendor with identical subjects on different days don't merge.
+    // Email attachments from a single message all share the same date.
+    const day = (f.date || "").substring(0, 10);
+    const key = `${subj}|${from}|${day}`;
     const existing = groups.get(key);
     if (existing) existing.push(f);
     else groups.set(key, [f]);
