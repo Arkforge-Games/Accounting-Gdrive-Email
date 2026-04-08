@@ -406,12 +406,17 @@ async function categorizeAndExtractFile(
 
       const aiResult = await aiCategorizeFile(file, emailBody, pdfText);
       const finalCategory = categoryWasLocked ? file.category : aiResult.category;
+      // Use AI's extracted transaction date if available — this is the actual
+      // invoice/receipt date from the PDF, NOT the email forward date.
+      const finalDate = aiResult.transactionDate || file.date;
+      const finalPeriod = finalDate.substring(0, 7);
       db.upsertFileIndex({
-        fileId: file.id, category: finalCategory, period: file.date?.substring(0, 7),
+        fileId: file.id, category: finalCategory, period: finalPeriod,
         vendor: aiResult.vendor || file.vendor || undefined, autoCategorized: true,
       });
       if (aiResult.amount) db.updateFileIndex(file.id, { amount: aiResult.amount, currency: aiResult.currency || undefined });
       if (aiResult.description) db.updateFileIndex(file.id, { notes: aiResult.description });
+      if (aiResult.invoiceNumber) db.updateFileIndex(file.id, { referenceNo: aiResult.invoiceNumber });
       if (aiResult.sheetType && !file.sheetType) db.updateFileIndex(file.id, { sheetType: aiResult.sheetType });
       if (aiResult.paymentMethod && !file.paymentMethod) db.updateFileIndex(file.id, { paymentMethod: aiResult.paymentMethod });
       if (aiResult.confidence === "low") db.updateFileIndex(file.id, { needsReview: true, reviewNotes: "Low AI confidence" });
@@ -421,6 +426,10 @@ async function categorizeAndExtractFile(
       file.amount = aiResult.amount || file.amount;
       if (aiResult.currency) file.currency = aiResult.currency;
       if (aiResult.description) file.notes = aiResult.description;
+      // Override file.date with the AI-extracted transaction date so the row
+      // writer uses it for jobDate, not the email arrival timestamp.
+      if (aiResult.transactionDate) file.date = aiResult.transactionDate;
+      if (aiResult.invoiceNumber) file.referenceNo = aiResult.invoiceNumber;
       result.aiCategorized++;
       db.logPipeline({ runId, fileId: file.id, action: "categorize_ai", status: "success", result: finalCategory, details: aiResult.description || (categoryWasLocked ? `Extraction only (category locked: ${finalCategory})` : undefined) });
     } catch (err) {

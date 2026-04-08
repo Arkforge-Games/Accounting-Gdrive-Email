@@ -25,6 +25,10 @@ interface AICategorizeResult {
   amount: string | null;
   currency: string | null;
   description: string | null;
+  /** Transaction date from PDF/body in ISO format YYYY-MM-DD (e.g. "2025-12-05"). NOT the email forward date. */
+  transactionDate: string | null;
+  /** Invoice/receipt reference number (e.g. "IN 52791905"). */
+  invoiceNumber: string | null;
   confidence: "high" | "medium" | "low";
 }
 
@@ -68,7 +72,7 @@ export async function aiCategorizeFile(
         { role: "user", content: prompt },
       ],
       temperature: 0.1,
-      max_tokens: 300,
+      max_tokens: 400,
     }),
   });
 
@@ -139,8 +143,12 @@ Respond with JSON:
   "amount": total amount as string (e.g. "224.00") or null,
   "currency": "USD", "HKD", "PHP", "SGD", "MYR", "IDR", "EUR", "GBP" or null,
   "description": one-line summary (e.g. "Claude API subscription receipt for March 2026"),
+  "transactionDate": "YYYY-MM-DD" — the actual date on the invoice/receipt (NOT the email date). Look for "Date of issue", "Invoice date", "Date", "Receipt date", "Paid on", etc. If you see "December 5, 2025", return "2025-12-05". null if you cannot find it.,
+  "invoiceNumber": invoice/receipt reference number as it appears on the document (e.g. "IN 52791905", "INV-2024-0042", "1B7K-DTKE"). null if not present.,
   "confidence": "high", "medium", or "low"
 }
+
+⚠️ transactionDate is CRITICAL. Andrea forwards old invoices/receipts to be recorded — the email forward date is NOT useful. The PDF has the real transaction date. Always extract it.
 
 CRITICAL RULES (from accountant Andrea):
 
@@ -238,6 +246,22 @@ function parseAIResponse(content: string): AICategorizeResult {
     let sheetType = parsed.sheetType || null;
     if (sheetType === "Receipt") sheetType = "CC";
 
+    // Normalize transactionDate — accept various formats and convert to YYYY-MM-DD
+    let transactionDate: string | null = null;
+    if (parsed.transactionDate) {
+      const raw = String(parsed.transactionDate).trim();
+      // Already ISO format YYYY-MM-DD
+      if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+        transactionDate = raw;
+      } else {
+        // Try to parse other formats (Date constructor handles "December 5, 2025", "Dec 5, 2025", "12/5/2025", etc.)
+        const d = new Date(raw);
+        if (!isNaN(d.getTime())) {
+          transactionDate = d.toISOString().substring(0, 10);
+        }
+      }
+    }
+
     return {
       category: validCategories.includes(parsed.category) ? parsed.category : "uncategorized",
       sheetType,
@@ -246,6 +270,8 @@ function parseAIResponse(content: string): AICategorizeResult {
       amount: parsed.amount || null,
       currency: parsed.currency || null,
       description: parsed.description || null,
+      transactionDate,
+      invoiceNumber: parsed.invoiceNumber || null,
       confidence: ["high", "medium", "low"].includes(parsed.confidence) ? parsed.confidence : "medium",
     };
   } catch {
@@ -258,6 +284,8 @@ function parseAIResponse(content: string): AICategorizeResult {
       amount: null,
       currency: null,
       description: null,
+      transactionDate: null,
+      invoiceNumber: null,
       confidence: "low",
     };
   }
