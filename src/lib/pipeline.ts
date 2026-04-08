@@ -18,6 +18,22 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 /** Categories that get recorded to the Payable tab */
 const PAYABLE_CATEGORIES = new Set(["bill", "reimbursement", "receipt", "payroll"]);
 
+/**
+ * Vendors known to be auto-billed to a company credit card.
+ * If a payable matches one of these, sheetType is forced to "CC" and
+ * paymentMethod to "Credit Card" — even if the rule-based categorizer
+ * returned "receipt" (which would otherwise yield the invalid sheetType
+ * "Receipt"). See ai-categorize.ts CRITICAL RULES.
+ */
+const SAAS_CC_VENDORS = /anthropic|claude|openai|github|cloudflare|vercel|netlify|aws|amazon\s*web|azure|microsoft|google|gcp|workspace|digital\s*ocean|hostinger|namecheap|godaddy|alibaba|alicloud|hetzner|vultr|linode|figma|canva|notion|slack|zoom|webwork|stripe|paypal|appsumo/i;
+
+function isSaasCcVendor(file: { vendor?: string | null; emailSubject?: string | null; emailFrom?: string | null; name?: string }): boolean {
+  return SAAS_CC_VENDORS.test(file.vendor || "")
+    || SAAS_CC_VENDORS.test(file.emailSubject || "")
+    || SAAS_CC_VENDORS.test(file.emailFrom || "")
+    || SAAS_CC_VENDORS.test(file.name || "");
+}
+
 /** Categories that get recorded to the Receivable tab */
 const RECEIVABLE_CATEGORIES = new Set(["invoice"]);
 
@@ -177,9 +193,16 @@ export async function runPipeline(): Promise<PipelineResult> {
 
         try {
           if (PAYABLE_CATEGORIES.has(file.category)) {
-            // Use AI's sheetType and paymentMethod if available, otherwise infer from category
-            const sheetType = file.sheetType || formatType(file.category);
-            const paymentMethod = file.paymentMethod || (file.category === "reimbursement" ? "Andrea CC" : "Bank");
+            // Determine sheetType. Order of precedence:
+            //  1. Known SaaS/CC vendor → "CC" (overrides everything; Andrea's
+            //     rule: receipts from Cloudflare/GitHub/OpenAI/etc are CC, never "Receipt")
+            //  2. AI's explicit sheetType (already validated, "Receipt" → "CC")
+            //  3. Fallback formatType from category
+            const isCC = isSaasCcVendor(file);
+            const sheetType = isCC ? "CC" : (file.sheetType || formatType(file.category));
+            const paymentMethod = isCC
+              ? "Credit Card"
+              : (file.paymentMethod || (file.category === "reimbursement" ? "Andrea CC" : "Bank"));
             const receiptLink = getReceiptLink(file);
             await appendPayableRow({
               jobDate: formatDate(file.date),
