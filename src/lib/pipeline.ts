@@ -101,9 +101,39 @@ export async function runPipeline(): Promise<PipelineResult> {
       db.logPipeline({ runId, action: "sheet_load", status: "error", error: err instanceof Error ? err.message : "Failed to load sheets" });
     }
 
-    // Step 2: Process each file
-    for (const file of unrecorded) {
+    // Group unrecorded files by email so multi-attachment emails produce ONE row.
+    // Files not from an email (gdrive uploads, manual uploads) get their own group.
+    const groups = groupByEmail(unrecorded);
+
+    // Step 2: Process each GROUP (not each file). All files in a group share the
+    // same category/sheetType/vendor/amount and produce a single Sheet row.
+    for (const group of groups) {
+      const file = group[0]; // representative file (first attachment)
+      const siblings = group.slice(1);
       try {
+        // 2a-pre: SUBJECT KEYWORD OVERRIDE — runs before any other categorization.
+        // Andrea labels her forwards intentionally. If the email subject says
+        // "reimburs", that is authoritative regardless of what the PDF contents say.
+        const subjectLower = (file.emailSubject || "").toLowerCase();
+        if (subjectLower.includes("reimburs") && file.category !== "reimbursement") {
+          const freelancerMatch = (file.emailSubject || "").match(/jamie|jayvee|\bjm\b|murphy|aarati/i);
+          const isFreelancer = !!freelancerMatch;
+          const sheetType = isFreelancer ? "Freelancer" : "Reimbursement";
+          const paymentMethod = isFreelancer ? "Bank" : "Andrea CC";
+          db.upsertFileIndex({
+            fileId: file.id,
+            category: "reimbursement",
+            period: file.date?.substring(0, 7),
+            autoCategorized: true,
+          });
+          db.updateFileIndex(file.id, { sheetType, paymentMethod });
+          file.category = "reimbursement";
+          file.sheetType = sheetType;
+          file.paymentMethod = paymentMethod;
+          result.categorized++;
+          db.logPipeline({ runId, fileId: file.id, action: "categorize_subject_override", status: "success", result: "reimbursement", details: `Subject contained "reimburs"; sheetType=${sheetType}` });
+        }
+
         // 2a: Ensure categorized
         if (file.category === "uncategorized" || !file.category) {
           // Try rule-based first
@@ -184,26 +214,40 @@ export async function runPipeline(): Promise<PipelineResult> {
           continue;
         }
 
-        // 2e: Record to Google Sheets
-        if (!file.amount && !file.vendor) {
-          db.logPipeline({ runId, fileId: file.id, action: "record", status: "skipped", details: "No amount or vendor" });
+        // 2e: SPARSE-ROW GUARD — refuse to write rows missing essential fields.
+        // Andrea hates half-empty rows. Flag for human review instead.
+        const missing: string[] = [];
+        if (!file.amount) missing.push("amount");
+        if (!file.vendor) missing.push("vendor");
+        if (!file.date) missing.push("date");
+        if (missing.length > 0) {
+          db.updateFileIndex(file.id, { needsReview: true, reviewNotes: `Missing required fields: ${missing.join(", ")}` });
+          db.logPipeline({ runId, fileId: file.id, action: "record", status: "needs_review", details: `Missing: ${missing.join(", ")}` });
+          // Mark siblings as needing review too so they don't reprocess every hour
+          for (const sib of siblings) {
+            db.updateFileIndex(sib.id, { needsReview: true, reviewNotes: `Missing required fields: ${missing.join(", ")}` });
+            db.logPipeline({ runId, fileId: sib.id, action: "record", status: "needs_review", details: `Sibling of ${file.id}; missing: ${missing.join(", ")}` });
+          }
           result.skipped++;
           continue;
         }
 
+        // Build the receipt link cell — concatenate all attachment links from this email
+        const allLinks = [file, ...siblings].map(getReceiptLink).filter(Boolean);
+        const receiptLink = allLinks.join("\n");
+
         try {
           if (PAYABLE_CATEGORIES.has(file.category)) {
             // Determine sheetType. Order of precedence:
-            //  1. Known SaaS/CC vendor → "CC" (overrides everything; Andrea's
-            //     rule: receipts from Cloudflare/GitHub/OpenAI/etc are CC, never "Receipt")
-            //  2. AI's explicit sheetType (already validated, "Receipt" → "CC")
-            //  3. Fallback formatType from category
-            const isCC = isSaasCcVendor(file);
-            const sheetType = isCC ? "CC" : (file.sheetType || formatType(file.category));
-            const paymentMethod = isCC
-              ? "Credit Card"
-              : (file.paymentMethod || (file.category === "reimbursement" ? "Andrea CC" : "Bank"));
-            const receiptLink = getReceiptLink(file);
+            //  1. Subject override already set sheetType (reimbursement) → keep it
+            //  2. Known SaaS/CC vendor → "CC" (overrides AI/rule; Cloudflare/GitHub/etc)
+            //  3. AI's explicit sheetType (already validated, "Receipt" → "CC")
+            //  4. Fallback formatType from category
+            const isCC = file.category !== "reimbursement" && isSaasCcVendor(file);
+            const sheetType = file.sheetType
+              || (isCC ? "CC" : formatType(file.category));
+            const paymentMethod = file.paymentMethod
+              || (isCC ? "Credit Card" : (file.category === "reimbursement" ? "Andrea CC" : "Bank"));
             await appendPayableRow({
               jobDate: formatDate(file.date),
               type: sheetType,
@@ -218,7 +262,11 @@ export async function runPipeline(): Promise<PipelineResult> {
               account: "HobbyLand",
               receiptCreated: "TRUE",
             });
-            db.logPipeline({ runId, fileId: file.id, action: "record", status: "success", result: "payable", details: `${file.vendor} ${file.currency} ${file.amount}` });
+            db.logPipeline({ runId, fileId: file.id, action: "record", status: "success", result: "payable", details: `${file.vendor} ${file.currency} ${file.amount}${siblings.length > 0 ? ` (+${siblings.length} attachments)` : ""}` });
+            // Mark all siblings as recorded so they don't reprocess
+            for (const sib of siblings) {
+              db.logPipeline({ runId, fileId: sib.id, action: "record", status: "success", result: "payable", details: `Merged into row for ${file.id}` });
+            }
             result.recorded++;
             await sleep(1200); // Throttle: max ~50 writes/min to stay under Google Sheets 60/min limit
 
@@ -226,7 +274,6 @@ export async function runPipeline(): Promise<PipelineResult> {
             // create any bills or invoices, only reconciliation for now."
             // Pipeline records to Google Sheets only; Xero is read-only for now.
           } else if (RECEIVABLE_CATEGORIES.has(file.category)) {
-            const receiptLink = getReceiptLink(file);
             await appendReceivableRow({
               jobDate: formatDate(file.date),
               type: "Invoice",
@@ -239,7 +286,10 @@ export async function runPipeline(): Promise<PipelineResult> {
               account: "HobbyLand",
               receiptCreated: "TRUE",
             });
-            db.logPipeline({ runId, fileId: file.id, action: "record", status: "success", result: "receivable", details: `${file.vendor} ${file.currency} ${file.amount}` });
+            db.logPipeline({ runId, fileId: file.id, action: "record", status: "success", result: "receivable", details: `${file.vendor} ${file.currency} ${file.amount}${siblings.length > 0 ? ` (+${siblings.length} attachments)` : ""}` });
+            for (const sib of siblings) {
+              db.logPipeline({ runId, fileId: sib.id, action: "record", status: "success", result: "receivable", details: `Merged into row for ${file.id}` });
+            }
             result.recorded++;
             await sleep(1200); // Throttle Google Sheets writes
 
@@ -334,18 +384,46 @@ function formatDate(dateStr: string): string {
   return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 }
 
-function mapCurrency(currency: string): string {
-  // Normalize currency codes for Xero
-  const c = (currency || "HKD").toUpperCase().trim();
-  if (c === "US$" || c === "US" || c === "$") return "USD";
-  if (c === "HK$" || c === "HK") return "HKD";
-  if (c === "₱" || c === "P") return "PHP";
-  if (c === "S$") return "SGD";
-  if (c === "RM") return "MYR";
-  if (c === "Rp") return "IDR";
-  if (c === "€") return "EUR";
-  if (c === "£") return "GBP";
-  return c;
+/**
+ * Group unrecorded files by source email so multi-attachment emails produce
+ * a single Sheet row instead of one row per PDF.
+ *
+ * Grouping key: lowercased emailSubject + emailFrom. Files without an email
+ * source (gdrive uploads, manual uploads) get their own group of size 1.
+ *
+ * Within each email group, the file with the most data (amount > vendor > date)
+ * is moved to the front so it becomes the "representative" used for classification
+ * and sheet writing.
+ */
+function groupByEmail(files: db.IndexedFile[]): db.IndexedFile[][] {
+  const groups = new Map<string, db.IndexedFile[]>();
+  const standalone: db.IndexedFile[][] = [];
+
+  for (const f of files) {
+    const subj = (f.emailSubject || "").trim().toLowerCase();
+    const from = (f.emailFrom || "").trim().toLowerCase();
+    if (!subj && !from) {
+      standalone.push([f]);
+      continue;
+    }
+    const key = `${subj}|${from}`;
+    const existing = groups.get(key);
+    if (existing) existing.push(f);
+    else groups.set(key, [f]);
+  }
+
+  // Sort each group so the file with the most extracted data comes first
+  const result: db.IndexedFile[][] = [];
+  for (const group of groups.values()) {
+    group.sort((a, b) => {
+      const aScore = (a.amount ? 4 : 0) + (a.vendor ? 2 : 0) + (a.date ? 1 : 0);
+      const bScore = (b.amount ? 4 : 0) + (b.vendor ? 2 : 0) + (b.date ? 1 : 0);
+      return bScore - aScore;
+    });
+    result.push(group);
+  }
+  result.push(...standalone);
+  return result;
 }
 
 function formatType(category: string): string {

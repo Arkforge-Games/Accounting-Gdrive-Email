@@ -144,6 +144,14 @@ Respond with JSON:
 
 CRITICAL RULES (from accountant Andrea):
 
+SUBJECT KEYWORD OVERRIDE (highest priority — overrides PDF content):
+- If Email Subject contains "reimburs" → category MUST be "reimbursement"
+  → If subject names a freelancer (Jamie/Jayvee/JM/Murphy/Aarati) → sheetType="Freelancer", paymentMethod="Bank"
+  → Otherwise → sheetType="Reimbursement", paymentMethod="Andrea CC"
+- If Email Subject contains "payroll" or "salary slip" → category="payroll", sheetType="Payroll"
+- The subject is authoritative because Andrea labels her forwards intentionally.
+  Do NOT classify based on PDF content if the subject already tells you the type.
+
 CATEGORY:
 - "junk" = email bounces, delivery failures, tracking pixels, system emails
 - "invoice" = sales invoices SENT TO customers (accounts receivable, money coming IN)
