@@ -136,12 +136,40 @@ export async function getReceivables(): Promise<ReceivableRow[]> {
 }
 
 // ===== Write =====
+//
+// We do NOT use sheets.spreadsheets.values.append() because Google Sheets'
+// table-detection heuristic is unreliable on this sheet: row 2 has a yellow
+// "CASH ONLY" band spanning columns P-R, which makes append treat P:R as a
+// separate "table" and writes new data starting at column P (15-column shift).
+//
+// Instead, find the last row with data in column A explicitly, then UPDATE
+// the next row with the full A:R range. Deterministic and bulletproof.
+
+async function findNextEmptyRow(sheetName: string, anchorCol: string = "A", startRow: number = 9): Promise<number> {
+  const sheets = getSheets();
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${sheetName}!${anchorCol}${startRow}:${anchorCol}10000`,
+    majorDimension: "COLUMNS",
+  });
+  const col = res.data.values?.[0] || [];
+  // Walk from the end backwards to find the last non-empty cell
+  let lastNonEmpty = -1;
+  for (let i = col.length - 1; i >= 0; i--) {
+    if (col[i] && String(col[i]).trim() !== "") {
+      lastNonEmpty = i;
+      break;
+    }
+  }
+  return startRow + lastNonEmpty + 1;
+}
 
 export async function appendPayableRow(data: Partial<PayableRow>): Promise<void> {
   const sheets = getSheets();
-  await sheets.spreadsheets.values.append({
+  const nextRow = await findNextEmptyRow("Payable", "A", 9);
+  await sheets.spreadsheets.values.update({
     spreadsheetId: SPREADSHEET_ID,
-    range: "Payable!A:R",
+    range: `Payable!A${nextRow}:R${nextRow}`,
     valueInputOption: "USER_ENTERED",
     requestBody: {
       values: [[
@@ -170,9 +198,10 @@ export async function appendPayableRow(data: Partial<PayableRow>): Promise<void>
 
 export async function appendReceivableRow(data: Partial<ReceivableRow>): Promise<void> {
   const sheets = getSheets();
-  await sheets.spreadsheets.values.append({
+  const nextRow = await findNextEmptyRow("Receivable", "A", 2);
+  await sheets.spreadsheets.values.update({
     spreadsheetId: SPREADSHEET_ID,
-    range: "Receivable!A:P",
+    range: `Receivable!A${nextRow}:P${nextRow}`,
     valueInputOption: "USER_ENTERED",
     requestBody: {
       values: [[
