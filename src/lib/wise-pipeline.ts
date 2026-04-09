@@ -21,6 +21,9 @@ import * as db from "./db";
 import { getCachedWiseData, WiseTransfer, WiseRecipient } from "./wise";
 import { appendPayableRow, getPayables, convertToHkd, formatHkd, updatePayableCell, getCurrentRunningBalance } from "./sheets";
 
+/** Throttle Sheets API calls — 60/min read+write quota per user. */
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 export interface WisePipelineResult {
   runId: string;
   scanned: number;
@@ -193,6 +196,8 @@ export async function runWisePipeline(): Promise<WisePipelineResult> {
             sheetRowIndex: matchedRowIndex,
           });
           result.matchedExisting++;
+          // Throttle: 2 cell updates above (status + date) — wait to stay under 60/min
+          await sleep(2500);
         } else {
           // Append new row
           const { sheetType, paymentMethod } = classifyWiseTransfer(recipientName, reference);
@@ -237,6 +242,9 @@ export async function runWisePipeline(): Promise<WisePipelineResult> {
             transferDate: t.created, sheetType, action: "appended",
           });
           result.appended++;
+          // Throttle: appendPayableRow makes 2 sheets calls (read+write).
+          // Sheets API limit is 60/min — sleep to stay safely under.
+          await sleep(2500);
         }
       } catch (err) {
         db.logPipeline({
