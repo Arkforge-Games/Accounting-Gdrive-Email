@@ -57,7 +57,12 @@ function findMatchingInvoice(
   tx: XeroBankTransaction,
   invoices: XeroInvoice[],
 ): XeroInvoice | null {
-  const expectedType = tx.Type === "SPEND" ? "ACCPAY" : "ACCREC";
+  // Xero bank tx types include variants like "SPEND-TRANSFER", "RECEIVE-TRANSFER",
+  // "SPEND-PREPAYMENT", etc. Match by prefix.
+  const isSpend = String(tx.Type || "").startsWith("SPEND");
+  const isReceive = String(tx.Type || "").startsWith("RECEIVE");
+  if (!isSpend && !isReceive) return null;
+  const expectedType = isSpend ? "ACCPAY" : "ACCREC";
   const txDate = new Date(tx.DateString).getTime();
   const txAmount = Math.abs(tx.Total);
   const txContact = (tx.Contact?.Name || "").toLowerCase();
