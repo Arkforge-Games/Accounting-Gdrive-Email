@@ -15,11 +15,14 @@ export async function GET() {
     const auth = getAuthenticatedClient();
     const drive = google.drive({ version: "v3", auth });
 
-    // Find the parent folder by name (matches anything starting with "(NEW) Expenses Receiv")
+    // Find the parent folder by name. Search includes shared drives + items shared with me.
     const parentSearch = await drive.files.list({
-      q: `mimeType='application/vnd.google-apps.folder' and name contains '(NEW) Expenses Receiv' and trashed=false`,
-      fields: "files(id,name,parents)",
-      pageSize: 10,
+      q: `mimeType='application/vnd.google-apps.folder' and name contains 'Expenses Receiv' and trashed=false`,
+      fields: "files(id,name,parents,driveId)",
+      pageSize: 25,
+      includeItemsFromAllDrives: true,
+      supportsAllDrives: true,
+      corpora: "allDrives",
     });
     const parents = parentSearch.data.files || [];
     if (parents.length === 0) {
@@ -34,6 +37,9 @@ export async function GET() {
         q: `'${parent.id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
         fields: "files(id,name)",
         pageSize: 50,
+        includeItemsFromAllDrives: true,
+        supportsAllDrives: true,
+        corpora: "allDrives",
       });
       result.push({
         parent: { id: parent.id, name: parent.name || "" },

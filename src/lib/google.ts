@@ -14,7 +14,10 @@ export function getAuthUrl() {
   return client.generateAuthUrl({
     access_type: "offline",
     scope: [
-      "https://www.googleapis.com/auth/drive.readonly",
+      // Full drive access — needed to upload receipt PDFs into the
+      // Credit Card / Reimbursement / Supplier folders for organization.
+      // Was previously drive.readonly but we now write files to Drive.
+      "https://www.googleapis.com/auth/drive",
       "https://www.googleapis.com/auth/gmail.readonly",
       "https://www.googleapis.com/auth/spreadsheets",
     ],
