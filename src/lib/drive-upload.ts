@@ -86,6 +86,9 @@ export async function uploadToDrive(
       body: Readable.from(content),
     },
     fields: "id,webViewLink",
+    // Required when the parent folder is in a Shared Drive (e.g. Hobbyland Group).
+    // Without this, Drive returns "File not found" for the folder ID.
+    supportsAllDrives: true,
   });
 
   if (!res.data.id) throw new Error("Drive upload returned no file ID");
