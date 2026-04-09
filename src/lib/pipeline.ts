@@ -278,6 +278,31 @@ export async function runPipeline(): Promise<PipelineResult> {
   return result;
 }
 
+/**
+ * Parse a payment amount cell into { value, currency }. Handles formats like:
+ *   "USD 14.20", "PHP 1,234.56", "HK$ 100", "₱500", "€10.00"
+ * Returns currency=null if no currency token is recognized.
+ */
+function parsePaymentAmount(s: string): { value: number; currency: string | null } {
+  const raw = (s || "").trim();
+  if (!raw) return { value: 0, currency: null };
+  // Pull out the numeric portion
+  const numMatch = raw.match(/[\d,]+\.?\d{0,4}/);
+  const value = numMatch ? parseFloat(numMatch[0].replace(/,/g, "")) : 0;
+  // Detect currency from any of the common tokens / symbols
+  const upper = raw.toUpperCase();
+  let currency: string | null = null;
+  if (/USD|US\$/.test(upper) || (raw.includes("$") && !raw.includes("HK") && !raw.includes("S$"))) currency = "USD";
+  else if (/HKD|HK\$/.test(upper)) currency = "HKD";
+  else if (/PHP|₱/.test(upper) || /(^|\s)P\d/.test(upper)) currency = "PHP";
+  else if (/SGD|S\$/.test(upper)) currency = "SGD";
+  else if (/EUR|€/.test(upper)) currency = "EUR";
+  else if (/GBP|£/.test(upper)) currency = "GBP";
+  else if (/MYR|RM/.test(upper)) currency = "MYR";
+  else if (/IDR|RP/.test(upper)) currency = "IDR";
+  return { value, currency };
+}
+
 function isDuplicate(
   file: db.IndexedFile,
   payables: { supplierName: string; invoiceNumber: string; paymentAmount: string; jobDate: string }[],
@@ -286,18 +311,23 @@ function isDuplicate(
   const refNo = file.referenceNo || "";
   const vendor = (file.vendor || "").toLowerCase();
   const amount = file.amount ? parseFloat(file.amount) : 0;
+  const fileCurrency = (file.currency || "").toUpperCase().trim();
   const fileDate = new Date(file.date).getTime();
 
   // Check payables
   for (const p of payables) {
-    // Exact invoice number match
+    // Exact invoice number match — strongest signal, currency-agnostic
     if (refNo && p.invoiceNumber && p.invoiceNumber.includes(refNo)) return true;
 
-    // Vendor + amount + date match
+    // Vendor + amount + currency + date match
     if (vendor && p.supplierName?.toLowerCase().includes(vendor.substring(0, 5))) {
-      const pAmount = parseFloat((p.paymentAmount || "0").replace(/[^0-9.]/g, "")) || 0;
-      if (amount > 0 && pAmount > 0 && Math.abs(amount - pAmount) / pAmount < 0.05) {
-        // Check date proximity (parse various date formats)
+      const parsed = parsePaymentAmount(p.paymentAmount || "");
+      if (amount > 0 && parsed.value > 0 && Math.abs(amount - parsed.value) / parsed.value < 0.05) {
+        // Currency must match (or existing row has no currency token, in which
+        // case we still allow the match — old rows often lack currency labels).
+        const currencyMatches = !parsed.currency || !fileCurrency || parsed.currency === fileCurrency;
+        if (!currencyMatches) continue;
+        // Date proximity within 7 days
         const pDate = new Date(p.jobDate).getTime();
         if (!isNaN(pDate) && Math.abs(fileDate - pDate) < 7 * 86400000) return true;
       }
@@ -440,6 +470,17 @@ async function categorizeAndExtractFile(
       db.logPipeline({ runId, fileId: file.id, action: "categorize_ai", status: "success", result: finalCategory, details: aiResult.description || (categoryWasLocked ? `Extraction only (category locked: ${finalCategory})` : undefined) });
     } catch (err) {
       db.logPipeline({ runId, fileId: file.id, action: "categorize_ai", status: "error", error: err instanceof Error ? err.message : "AI failed" });
+    }
+  }
+
+  // 3-bis: Apply SaaS CC vendor override to PERSISTED sheetType too.
+  // The runtime override at write-time already corrects the row, but we also
+  // persist it so the DB stays consistent with what's in the sheet.
+  if (file.category !== "reimbursement" && PAYABLE_CATEGORIES.has(file.category) && isSaasCcVendor(file)) {
+    if (file.sheetType !== "CC") {
+      db.updateFileIndex(file.id, { sheetType: "CC", paymentMethod: "Credit Card" });
+      file.sheetType = "CC";
+      file.paymentMethod = "Credit Card";
     }
   }
 
