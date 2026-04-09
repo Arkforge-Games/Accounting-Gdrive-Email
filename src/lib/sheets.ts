@@ -329,6 +329,67 @@ export async function setSheetDropdowns(): Promise<{ applied: number }> {
   return { applied: requests.length };
 }
 
+// ===== HKD conversion (cash columns Q & R) =====
+//
+// Andrea's April 2026 checklist item #4: column Q gets the HKD-equivalent of
+// every non-reimbursement payable, and column R gets the running balance.
+//
+// Wise sync caches exchange rates with keys like "USD_HKD", "PHP_HKD" etc.
+// (See wise.ts ratePairs.) We look those up here. If the direct rate is
+// missing, fall back to the inverse (HKD_X → 1/rate).
+
+/**
+ * Convert an amount in any currency to HKD using cached Wise exchange rates.
+ * Returns null if no rate is available (caller should leave Q empty).
+ */
+export function convertToHkd(amount: number, currency: string): number | null {
+  const cur = (currency || "").toUpperCase().trim();
+  if (!cur || cur === "HKD") return amount;
+  if (!isFinite(amount) || amount <= 0) return null;
+
+  const cached = getDataCache("wise", "exchange_rates");
+  const rates = (cached?.data as Record<string, number> | undefined) || {};
+
+  // Direct rate: X → HKD
+  const direct = rates[`${cur}_HKD`];
+  if (direct && isFinite(direct) && direct > 0) return amount * direct;
+
+  // Inverse rate: HKD → X (so 1 X = 1 / rate HKD)
+  const inverse = rates[`HKD_${cur}`];
+  if (inverse && isFinite(inverse) && inverse > 0) return amount / inverse;
+
+  return null;
+}
+
+/** Format an HKD amount for display in the cash columns. */
+export function formatHkd(amount: number): string {
+  return `HKD ${amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/**
+ * Read the current running balance from column R (the cash running balance
+ * column). Walks up from row 500 to find the last non-empty value.
+ */
+export async function getCurrentRunningBalance(): Promise<number> {
+  const sheets = getSheets();
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: "Payable!Q9:Q1000",
+    majorDimension: "COLUMNS",
+  });
+  const col = res.data.values?.[0] || [];
+  // Sum all numeric values in column Q (non-reimbursement HKD amounts)
+  let total = 0;
+  for (const cell of col) {
+    if (!cell) continue;
+    const m = String(cell).match(/[\d.,]+/);
+    if (!m) continue;
+    const v = parseFloat(m[0].replace(/,/g, ""));
+    if (isFinite(v)) total += v;
+  }
+  return total;
+}
+
 // ===== Sync & Cache =====
 
 export async function syncSheetData(): Promise<{ payables: number; receivables: number }> {

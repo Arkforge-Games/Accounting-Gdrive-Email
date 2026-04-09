@@ -315,8 +315,13 @@ export async function syncWiseData(): Promise<{
     totalBalances += balances.length;
   }
 
-  // Get some common exchange rates
-  const ratePairs = [["HKD", "PHP"], ["HKD", "MYR"], ["HKD", "IDR"], ["HKD", "SGD"], ["HKD", "USD"], ["USD", "PHP"]];
+  // Get common exchange rates. Cache both directions and X→HKD for every
+  // major currency Andrea uses. The Q/R cash columns need X→HKD conversion.
+  const ratePairs = [
+    ["HKD", "PHP"], ["HKD", "MYR"], ["HKD", "IDR"], ["HKD", "SGD"], ["HKD", "USD"], ["HKD", "EUR"], ["HKD", "GBP"],
+    ["USD", "HKD"], ["PHP", "HKD"], ["MYR", "HKD"], ["IDR", "HKD"], ["SGD", "HKD"], ["EUR", "HKD"], ["GBP", "HKD"],
+    ["USD", "PHP"],
+  ];
   const rates: Record<string, number> = {};
   for (const [src, tgt] of ratePairs) {
     try {
