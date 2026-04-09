@@ -246,6 +246,89 @@ export async function updateReceivableCell(row: number, col: string, value: stri
   });
 }
 
+// ===== Data Validation (Drop-downs) =====
+
+/**
+ * Get the numeric sheetId for a given tab name (Payable / Receivable).
+ * Required for batchUpdate requests which use numeric IDs, not the spreadsheet ID.
+ */
+async function getSheetId(tabName: string): Promise<number> {
+  const sheets = getSheets();
+  const meta = await sheets.spreadsheets.get({
+    spreadsheetId: SPREADSHEET_ID,
+    fields: "sheets(properties(sheetId,title))",
+  });
+  const sheet = meta.data.sheets?.find(s => s.properties?.title === tabName);
+  if (!sheet?.properties?.sheetId === undefined || sheet?.properties?.sheetId === null) {
+    throw new Error(`Sheet tab "${tabName}" not found`);
+  }
+  return sheet!.properties!.sheetId!;
+}
+
+/**
+ * Apply data validation drop-downs to the Payable sheet's Type, Payment Status,
+ * Payment Method, and Account columns. Andrea's April 2026 checklist item #2.
+ *
+ * Uses ONE_OF_LIST condition with strict=false so the AI can still write values
+ * not in the list (the dropdown shows suggestions but doesn't reject other values).
+ *
+ * One-time setup; idempotent — running it twice is harmless.
+ */
+export async function setSheetDropdowns(): Promise<{ applied: number }> {
+  const sheets = getSheets();
+  const sheetId = await getSheetId("Payable");
+
+  // Column index (0-based) → list of allowed values
+  // B=1 (Type), K=10 (Payment Status), M=12 (Payment Method), N=13 (Account)
+  const dropdowns: Array<{ col: number; label: string; values: string[] }> = [
+    {
+      col: 1, label: "Type",
+      values: ["Invoice", "CC", "Reimbursement", "Freelancer", "Freelancer - Reimbursement", "Supplier", "Staff", "Cash", "Payroll"],
+    },
+    {
+      col: 10, label: "Payment Status",
+      values: ["Pending", "Paid", "Awaiting Payment", "Cancelled"],
+    },
+    {
+      col: 12, label: "Payment Method",
+      values: ["Andrea CC", "Credit Card", "Bank", "Cash", "Wise", "PayPal"],
+    },
+    {
+      col: 13, label: "Account",
+      values: ["HobbyLand"],
+    },
+  ];
+
+  const requests = dropdowns.map(d => ({
+    setDataValidation: {
+      range: {
+        sheetId,
+        startRowIndex: 8, // Row 9 (data starts here, headers + template above)
+        endRowIndex: 1000,
+        startColumnIndex: d.col,
+        endColumnIndex: d.col + 1,
+      },
+      rule: {
+        condition: {
+          type: "ONE_OF_LIST",
+          values: d.values.map(v => ({ userEnteredValue: v })),
+        },
+        inputMessage: `Choose a ${d.label}`,
+        // strict=false → users (and the AI) can still type values not in the list
+        strict: false,
+        showCustomUi: true,
+      },
+    },
+  }));
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: SPREADSHEET_ID,
+    requestBody: { requests },
+  });
+
+  return { applied: requests.length };
+}
+
 // ===== Sync & Cache =====
 
 export async function syncSheetData(): Promise<{ payables: number; receivables: number }> {
