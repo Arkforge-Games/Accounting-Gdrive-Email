@@ -137,11 +137,16 @@ function initSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_file_index_vendor ON file_index(vendor);
   `);
 
-  // Migration: add sheet_type, payment_method, needs_review columns if not present
+  // Migration: add sheet_type, payment_method, needs_review, transaction_date, drive_file_id columns if not present
   try { db.exec("ALTER TABLE file_index ADD COLUMN sheet_type TEXT"); } catch { /* exists */ }
   try { db.exec("ALTER TABLE file_index ADD COLUMN payment_method TEXT"); } catch { /* exists */ }
   try { db.exec("ALTER TABLE file_index ADD COLUMN needs_review INTEGER DEFAULT 0"); } catch { /* exists */ }
   try { db.exec("ALTER TABLE file_index ADD COLUMN review_notes TEXT"); } catch { /* exists */ }
+  // transaction_date: actual invoice/receipt date from PDF (YYYY-MM-DD), NOT the email date
+  try { db.exec("ALTER TABLE file_index ADD COLUMN transaction_date TEXT"); } catch { /* exists */ }
+  // drive_file_id: Google Drive file ID after the receipt has been uploaded for organization
+  try { db.exec("ALTER TABLE file_index ADD COLUMN drive_file_id TEXT"); } catch { /* exists */ }
+  try { db.exec("ALTER TABLE file_index ADD COLUMN drive_file_url TEXT"); } catch { /* exists */ }
 
   db.exec(`
 
@@ -626,6 +631,9 @@ export interface IndexedFile extends SyncFile {
   needsReview?: boolean;
   reviewNotes?: string | null;
   emailId?: string | null;
+  transactionDate?: string | null;
+  driveFileId?: string | null;
+  driveFileUrl?: string | null;
 }
 
 export function upsertFileIndex(entry: {
@@ -681,6 +689,9 @@ export function updateFileIndex(fileId: string, updates: Partial<{
   paymentMethod: string;
   needsReview: boolean;
   reviewNotes: string;
+  transactionDate: string;
+  driveFileId: string;
+  driveFileUrl: string;
 }>) {
   const d = getDb();
   const sets: string[] = [];
@@ -698,6 +709,9 @@ export function updateFileIndex(fileId: string, updates: Partial<{
   if (updates.paymentMethod !== undefined) { sets.push("payment_method = ?"); params.push(updates.paymentMethod); }
   if (updates.needsReview !== undefined) { sets.push("needs_review = ?"); params.push(updates.needsReview ? 1 : 0); }
   if (updates.reviewNotes !== undefined) { sets.push("review_notes = ?"); params.push(updates.reviewNotes); }
+  if (updates.transactionDate !== undefined) { sets.push("transaction_date = ?"); params.push(updates.transactionDate); }
+  if (updates.driveFileId !== undefined) { sets.push("drive_file_id = ?"); params.push(updates.driveFileId); }
+  if (updates.driveFileUrl !== undefined) { sets.push("drive_file_url = ?"); params.push(updates.driveFileUrl); }
 
   if (sets.length === 0) return;
   sets.push("updated_at = datetime('now')");
@@ -720,7 +734,8 @@ export function getIndexedFiles(filters?: {
   let sql = `
     SELECT f.*, f.email_id, fi.category, fi.status as accounting_status, fi.period, fi.notes,
            fi.vendor, fi.amount, fi.currency, fi.reference_no, fi.auto_categorized,
-           fi.sheet_type, fi.payment_method, fi.needs_review, fi.review_notes
+           fi.sheet_type, fi.payment_method, fi.needs_review, fi.review_notes,
+           fi.transaction_date, fi.drive_file_id, fi.drive_file_url
     FROM files f
     LEFT JOIN file_index fi ON f.id = fi.file_id
     WHERE 1=1
@@ -770,25 +785,38 @@ export function getIndexedFiles(filters?: {
     payment_method: string | null;
     needs_review: number | null;
     review_notes: string | null;
+    transaction_date: string | null;
+    drive_file_id: string | null;
+    drive_file_url: string | null;
   })[];
 
-  return rows.map((row) => ({
-    ...rowToFile(row),
-    category: row.category || "uncategorized",
-    accountingStatus: row.accounting_status || "pending",
-    period: row.period,
-    notes: row.notes,
-    vendor: row.vendor,
-    amount: row.amount,
-    currency: row.currency || "PHP",
-    referenceNo: row.reference_no,
-    autoCategorized: row.auto_categorized === 1,
-    sheetType: row.sheet_type,
-    paymentMethod: row.payment_method,
-    needsReview: row.needs_review === 1,
-    reviewNotes: row.review_notes,
-    emailId: row.email_id,
-  }));
+  return rows.map((row) => {
+    const base = rowToFile(row);
+    // If we have a transaction_date from the AI, override file.date with it.
+    // The original email date stays in the DB but the in-memory date used by
+    // the pipeline is the actual invoice/receipt date.
+    if (row.transaction_date) base.date = row.transaction_date;
+    return {
+      ...base,
+      category: row.category || "uncategorized",
+      accountingStatus: row.accounting_status || "pending",
+      period: row.period,
+      notes: row.notes,
+      vendor: row.vendor,
+      amount: row.amount,
+      currency: row.currency || "PHP",
+      referenceNo: row.reference_no,
+      autoCategorized: row.auto_categorized === 1,
+      sheetType: row.sheet_type,
+      paymentMethod: row.payment_method,
+      needsReview: row.needs_review === 1,
+      reviewNotes: row.review_notes,
+      emailId: row.email_id,
+      transactionDate: row.transaction_date,
+      driveFileId: row.drive_file_id,
+      driveFileUrl: row.drive_file_url,
+    };
+  });
 }
 
 export function getAccountingSummary(): {

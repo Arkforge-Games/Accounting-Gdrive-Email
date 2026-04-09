@@ -11,6 +11,7 @@ import * as db from "./db";
 import { categorizeFile, extractAmountFromBody } from "./categorize";
 import { isAIConfigured, aiCategorizeFile } from "./ai-categorize";
 import { appendPayableRow, appendReceivableRow, getPayables, getReceivables } from "./sheets";
+import { uploadToDrive, getDriveFolderForSheetType, buildDriveFilename } from "./drive-upload";
 
 /** Sleep helper to throttle Google Sheets writes (max 60/min) */
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -174,11 +175,8 @@ export async function runPipeline(): Promise<PipelineResult> {
           if (PAYABLE_CATEGORIES.has(file.category)) {
             // Determine sheetType. Order of precedence:
             //  1. Reimbursement category → use file.sheetType (Reimbursement or Freelancer)
-            //     set by the subject override; never CC even for SaaS reimbursements
-            //  2. Known SaaS/CC vendor → ALWAYS "CC" (Andrea's rule — overrides any
-            //     AI or rule-based sheetType, since the AI sometimes still picks
-            //     "Supplier" for Cloudflare/GitHub/etc even though they're auto-billed)
-            //  3. AI's explicit sheetType (already validated, "Receipt" → "CC")
+            //  2. Known SaaS/CC vendor → ALWAYS "CC"
+            //  3. AI's explicit sheetType
             //  4. Fallback formatType from category
             const isCC = file.category !== "reimbursement" && isSaasCcVendor(file);
             let sheetType: string;
@@ -193,10 +191,16 @@ export async function runPipeline(): Promise<PipelineResult> {
               sheetType = file.sheetType || formatType(file.category);
               paymentMethod = file.paymentMethod || "Bank";
             }
+
+            // Upload the receipt file to the matching Drive folder so the
+            // receipt link in the sheet points to a real Drive file Andrea
+            // can click. Falls back to the proxy URL if upload fails.
+            const finalReceiptLink = await uploadReceiptToDrive(file, sheetType, file.category) || receiptLink;
+
             await appendPayableRow({
               jobDate: formatDate(file.date),
               type: sheetType,
-              receiptLink,
+              receiptLink: finalReceiptLink,
               supplierName: file.vendor || "Unknown",
               invoiceNumber: file.referenceNo || "",
               fullName: file.category === "reimbursement"
@@ -218,10 +222,11 @@ export async function runPipeline(): Promise<PipelineResult> {
             // create any bills or invoices, only reconciliation for now."
             // Pipeline records to Google Sheets only; Xero is read-only for now.
           } else if (RECEIVABLE_CATEGORIES.has(file.category)) {
+            const finalReceiptLink = await uploadReceiptToDrive(file, "Invoice", file.category) || receiptLink;
             await appendReceivableRow({
               jobDate: formatDate(file.date),
               type: "Invoice",
-              receiptLink,
+              receiptLink: finalReceiptLink,
               clientName: file.vendor || "Unknown",
               invoiceNumber: file.referenceNo || "",
               paymentAmount: file.amount ? `${file.currency} ${file.amount}` : "",
@@ -417,6 +422,7 @@ async function categorizeAndExtractFile(
       if (aiResult.amount) db.updateFileIndex(file.id, { amount: aiResult.amount, currency: aiResult.currency || undefined });
       if (aiResult.description) db.updateFileIndex(file.id, { notes: aiResult.description });
       if (aiResult.invoiceNumber) db.updateFileIndex(file.id, { referenceNo: aiResult.invoiceNumber });
+      if (aiResult.transactionDate) db.updateFileIndex(file.id, { transactionDate: aiResult.transactionDate });
       if (aiResult.sheetType && !file.sheetType) db.updateFileIndex(file.id, { sheetType: aiResult.sheetType });
       if (aiResult.paymentMethod && !file.paymentMethod) db.updateFileIndex(file.id, { paymentMethod: aiResult.paymentMethod });
       if (aiResult.confidence === "low") db.updateFileIndex(file.id, { needsReview: true, reviewNotes: "Low AI confidence" });
@@ -457,6 +463,51 @@ async function categorizeAndExtractFile(
       file.amount = extracted.amount;
       file.currency = extracted.currency;
     }
+  }
+}
+
+/**
+ * Upload a file's PDF/image content to the Drive folder matching its category
+ * (Credit Card / Reimbursement / Supplier / etc.) and return the Drive file URL
+ * to use as the Receipt Link in the sheet.
+ *
+ * If the file has already been uploaded (drive_file_url present in DB), reuses
+ * that URL — idempotent across re-runs. If no folder is configured for the
+ * sheetType, or if upload fails, returns null and the caller falls back to
+ * the proxy URL.
+ */
+async function uploadReceiptToDrive(
+  file: db.IndexedFile,
+  sheetType: string,
+  category: string,
+): Promise<string | null> {
+  // Already uploaded — reuse
+  if (file.driveFileUrl) return file.driveFileUrl;
+
+  const folderId = getDriveFolderForSheetType(sheetType, category);
+  if (!folderId) return null; // No folder configured
+
+  // Only upload files we have content for
+  const fileData = db.getFileContent(file.id);
+  if (!fileData || !fileData.content) return null;
+
+  try {
+    const filename = buildDriveFilename({
+      date: file.date,
+      vendor: file.vendor,
+      amount: file.amount,
+      currency: file.currency,
+      invoiceNumber: file.referenceNo,
+      originalName: file.name,
+    });
+    const result = await uploadToDrive(folderId, filename, file.mimeType, Buffer.from(fileData.content));
+    db.updateFileIndex(file.id, { driveFileId: result.fileId, driveFileUrl: result.webViewLink });
+    file.driveFileId = result.fileId;
+    file.driveFileUrl = result.webViewLink;
+    return result.webViewLink;
+  } catch (err) {
+    console.error(`[drive-upload] failed for ${file.id}:`, err instanceof Error ? err.message : err);
+    return null;
   }
 }
 
