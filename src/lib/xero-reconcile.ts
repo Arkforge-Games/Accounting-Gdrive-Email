@@ -131,12 +131,22 @@ export async function runXeroReconcile(opts: { autoApply?: boolean } = {}): Prom
       // We can still try to match against bills without the chart
     }
 
-    // 2. Fetch all bank transactions
+    // 2. Fetch all bank transactions, then filter to UNRECONCILED ones only.
+    // Xero's IsReconciled flag tells us which need work — a bank tx that's
+    // already reconciled (matched to a bill or categorized) should be left
+    // alone. Most transactions in a healthy Xero are reconciled, so this
+    // filter dramatically narrows the candidate set.
     const allBankTx = await getAllBankTransactions();
-    // Only process AUTHORISED ones (Xero auto-creates these as bank feed comes in)
-    // We assume any AUTHORISED bank tx without a matching IsReconciled flag needs handling.
-    const candidates = allBankTx.filter(t => t.Status === "AUTHORISED");
+    const candidates = allBankTx.filter(t =>
+      t.Status === "AUTHORISED" && t.IsReconciled === false
+    );
     result.scanned = candidates.length;
+    db.logPipeline({
+      runId,
+      action: "xero_bank_scan",
+      status: "success",
+      details: `${allBankTx.length} total bank txns, ${candidates.length} unreconciled`,
+    });
 
     if (candidates.length === 0) {
       db.logPipeline({ runId, action: "xero_reconcile_end", status: "success", details: "No bank transactions to process" });

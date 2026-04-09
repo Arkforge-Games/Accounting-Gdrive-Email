@@ -417,6 +417,7 @@ export interface XeroBankTransaction {
   Total: number;
   Reference: string;
   Status: string;
+  IsReconciled: boolean;
   BankAccount: { AccountID: string; Name: string; Code: string };
   LineItems: { Description: string; Quantity: number; UnitAmount: number; LineAmount: number; AccountCode: string }[];
 }
