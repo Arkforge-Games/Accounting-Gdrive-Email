@@ -67,24 +67,24 @@ Source: WhatsApp message from Andrea Hobbyland on 2026-04-09 14:31 PHT.
 1. Add `resolveOrCreateFolder(parentId, name)` helper in `drive-upload.ts` that uses Drive API to find a child folder by name, or create it if missing. Caches results in memory for the duration of the pipeline run.
 2. Extend the upload path to walk:
    - Step 1: category folder (existing — `Credit Card`, etc.)
-   - Step 2: fiscal-year folder (`Jul 25-26` for July 2025 - June 2026, etc.)
+   - Step 2: fiscal-year folder (`2025-2026` for July 2025 - June 2026, `2026-2027` for July 2026 - June 2027, etc. — Andrea clarified format on 2026-04-09)
    - Step 3: app folder (extracted from the receipt — see below)
 3. **App detection logic:**
    - For Cloudflare domain receipts, the `jobDetails` description already contains the domain name (e.g. `Registrar Renewal Fee - autoquotation.app`). Parse the domain out.
    - For other SaaS (Anthropic, GitHub, OpenAI, Slack, Zoom, etc.), use the vendor name itself as the "app folder". So Anthropic charges → `Anthropic/`.
    - If no specific app can be detected, fall back to `(uncategorized)/` under the period folder.
-4. **Fiscal year format:** Use `Jul YY-YY` format (e.g. `Jul 25-26` covers 2025-07-01 → 2026-06-30). HK fiscal year matches the example Andrea gave.
+4. **Fiscal year format:** Use `YYYY-YYYY` format (e.g. `2025-2026` covers 2025-07-01 → 2026-06-30). Andrea clarified on 2026-04-09 to use this format, not `Jul 25-26`. Still July-to-June fiscal year.
 5. Folder structure example:
 
 ```
 Credit Card/
-├── Jul 25-26/
+├── 2025-2026/
 │   ├── autoquotation.app/
 │   │   └── 2025-12-05 - Cloudflare, Inc. - USD 14.20 - IN 52791905.pdf
 │   ├── devehub.app/
 │   ├── Anthropic/
 │   └── GitHub/
-└── Jul 26-27/
+└── 2026-2027/
     └── ...
 ```
 

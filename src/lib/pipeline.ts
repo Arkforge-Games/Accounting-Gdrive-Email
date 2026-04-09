@@ -11,7 +11,7 @@ import * as db from "./db";
 import { categorizeFile, extractAmountFromBody } from "./categorize";
 import { isAIConfigured, aiCategorizeFile } from "./ai-categorize";
 import { appendPayableRow, appendReceivableRow, getPayables, getReceivables } from "./sheets";
-import { uploadToDrive, getDriveFolderForSheetType, buildDriveFilename } from "./drive-upload";
+import { uploadToDrive, getDriveFolderForSheetType, buildDriveFilename, resolveOrCreateFolder, getFiscalYearFolderName, resolveAppFolderName } from "./drive-upload";
 
 /** Sleep helper to throttle Google Sheets writes (max 60/min) */
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -508,14 +508,15 @@ async function categorizeAndExtractFile(
 }
 
 /**
- * Upload a file's PDF/image content to the Drive folder matching its category
- * (Credit Card / Reimbursement / Supplier / etc.) and return the Drive file URL
- * to use as the Receipt Link in the sheet.
+ * Upload a file's PDF/image content to the appropriate Drive folder, organized
+ * as: <category>/<fiscal-year>/<app>/. The fiscal year (e.g. "2025-2026") and
+ * app folder (e.g. "autoquotation.app" or "Anthropic") are auto-created on
+ * first use via resolveOrCreateFolder.
  *
- * If the file has already been uploaded (drive_file_url present in DB), reuses
- * that URL — idempotent across re-runs. If no folder is configured for the
- * sheetType, or if upload fails, returns null and the caller falls back to
- * the proxy URL.
+ * Returns the Drive file URL for use as the Receipt Link in the sheet.
+ *
+ * Idempotent: if the file already has a drive_file_url in DB, reuses it.
+ * Falls back to null on any error so the caller uses the proxy URL.
  */
 async function uploadReceiptToDrive(
   file: db.IndexedFile,
@@ -525,14 +526,20 @@ async function uploadReceiptToDrive(
   // Already uploaded — reuse
   if (file.driveFileUrl) return file.driveFileUrl;
 
-  const folderId = getDriveFolderForSheetType(sheetType, category);
-  if (!folderId) return null; // No folder configured
+  const categoryFolderId = getDriveFolderForSheetType(sheetType, category);
+  if (!categoryFolderId) return null; // No folder configured for this sheetType
 
   // Only upload files we have content for
   const fileData = db.getFileContent(file.id);
   if (!fileData || !fileData.content) return null;
 
   try {
+    // Walk: category folder → fiscal year folder → app folder
+    const fiscalYear = getFiscalYearFolderName(file.date);
+    const appName = resolveAppFolderName({ description: file.notes, vendor: file.vendor });
+    const fyFolderId = await resolveOrCreateFolder(categoryFolderId, fiscalYear);
+    const appFolderId = await resolveOrCreateFolder(fyFolderId, appName);
+
     const filename = buildDriveFilename({
       date: file.date,
       vendor: file.vendor,
@@ -541,7 +548,7 @@ async function uploadReceiptToDrive(
       invoiceNumber: file.referenceNo,
       originalName: file.name,
     });
-    const result = await uploadToDrive(folderId, filename, file.mimeType, Buffer.from(fileData.content));
+    const result = await uploadToDrive(appFolderId, filename, file.mimeType, Buffer.from(fileData.content));
     db.updateFileIndex(file.id, { driveFileId: result.fileId, driveFileUrl: result.webViewLink });
     file.driveFileId = result.fileId;
     file.driveFileUrl = result.webViewLink;

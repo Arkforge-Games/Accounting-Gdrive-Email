@@ -19,6 +19,10 @@ import { google } from "googleapis";
 import { Readable } from "stream";
 import { getAuthenticatedClient } from "./google";
 
+// In-memory cache of resolved folder IDs (parentId|name → folderId).
+// Cleared on process restart; populated on first lookup per pipeline run.
+const folderCache = new Map<string, string>();
+
 /**
  * Maps a sheetType (or category fallback) to the destination Drive folder ID.
  * Returns null if no folder is configured for the given type, in which case
@@ -96,6 +100,101 @@ export async function uploadToDrive(
     fileId: res.data.id,
     webViewLink: res.data.webViewLink || `https://drive.google.com/file/d/${res.data.id}/view`,
   };
+}
+
+/**
+ * Find a child folder by name under a given parent, creating it if missing.
+ * Used to build the nested fiscal-year/app-name folder structure under each
+ * top-level category folder. Caches results in memory for the duration of
+ * the process.
+ *
+ * Andrea's April 2026 checklist item #3.
+ */
+export async function resolveOrCreateFolder(parentId: string, name: string): Promise<string> {
+  const cacheKey = `${parentId}|${name}`;
+  const cached = folderCache.get(cacheKey);
+  if (cached) return cached;
+
+  const auth = getAuthenticatedClient();
+  const drive = google.drive({ version: "v3", auth });
+
+  // Escape single quotes in the name for the search query
+  const safeName = name.replace(/'/g, "\\'");
+  const search = await drive.files.list({
+    q: `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and name='${safeName}' and trashed=false`,
+    fields: "files(id,name)",
+    pageSize: 5,
+    includeItemsFromAllDrives: true,
+    supportsAllDrives: true,
+    corpora: "allDrives",
+  });
+
+  const existing = search.data.files?.[0];
+  if (existing?.id) {
+    folderCache.set(cacheKey, existing.id);
+    return existing.id;
+  }
+
+  // Not found — create it
+  const created = await drive.files.create({
+    requestBody: {
+      name,
+      parents: [parentId],
+      mimeType: "application/vnd.google-apps.folder",
+    },
+    fields: "id",
+    supportsAllDrives: true,
+  });
+  if (!created.data.id) throw new Error(`Failed to create folder "${name}" under ${parentId}`);
+  folderCache.set(cacheKey, created.data.id);
+  return created.data.id;
+}
+
+/**
+ * Compute the fiscal year folder name for a given transaction date.
+ * Hobbyland fiscal year runs July to June, named "YYYY-YYYY".
+ * Examples:
+ *   2025-12-05 → "2025-2026" (July 2025 - June 2026)
+ *   2026-04-09 → "2025-2026" (still in fiscal year that started July 2025)
+ *   2026-07-15 → "2026-2027" (new fiscal year starts July 2026)
+ *
+ * Andrea's April 2026 checklist item #3 (clarified format on 2026-04-09).
+ */
+export function getFiscalYearFolderName(date: string | null | undefined): string {
+  if (!date) return "unknown-fy";
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return "unknown-fy";
+  const year = d.getUTCFullYear();
+  const month = d.getUTCMonth() + 1; // 1-12
+  // If month is July or later, fiscal year starts THIS year. Otherwise, last year.
+  const fyStart = month >= 7 ? year : year - 1;
+  return `${fyStart}-${fyStart + 1}`;
+}
+
+/**
+ * Determine the "app" folder name for a receipt based on its description and vendor.
+ * Andrea wants per-app organization within each fiscal year folder.
+ *
+ * Logic:
+ *   1. If the description (jobDetails) contains a domain like "autoquotation.app"
+ *      or "devehub.app", use that domain as the app folder.
+ *   2. Else use the vendor name (e.g. "Anthropic", "GitHub", "OpenAI").
+ *   3. Else "(uncategorized)".
+ */
+export function resolveAppFolderName(opts: {
+  description: string | null | undefined;
+  vendor: string | null | undefined;
+}): string {
+  // Extract domain from description if present
+  if (opts.description) {
+    const domainMatch = opts.description.match(/\b([a-z0-9][a-z0-9-]*\.(?:app|com|org|io|net|co|dev|ai|xyz|tech))\b/i);
+    if (domainMatch) return domainMatch[1].toLowerCase();
+  }
+  // Fall back to vendor name (sanitized)
+  if (opts.vendor) {
+    return opts.vendor.replace(/[/\\:*?"<>|]/g, "_").trim();
+  }
+  return "(uncategorized)";
 }
 
 /**
