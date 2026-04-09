@@ -17,6 +17,7 @@ import { NextResponse } from "next/server";
 import { google } from "googleapis";
 import { getAuthenticatedClient } from "@/lib/google";
 import { resolveOrCreateFolder, getFiscalYearFolderName, resolveAppFolderName } from "@/lib/drive-upload";
+import * as db from "@/lib/db";
 
 const CATEGORY_FOLDER_IDS: Record<string, string | undefined> = {
   "Credit Card": process.env.DRIVE_FOLDER_CC,
@@ -41,6 +42,14 @@ export async function POST() {
   try {
     const auth = getAuthenticatedClient();
     const drive = google.drive({ version: "v3", auth });
+
+    // Build a lookup from Drive file ID → file_index row so we can use the
+    // real notes/vendor (not the filename) when computing the app folder.
+    const indexedFiles = db.getIndexedFiles({});
+    const byDriveId = new Map<string, db.IndexedFile>();
+    for (const f of indexedFiles) {
+      if (f.driveFileId) byDriveId.set(f.driveFileId, f);
+    }
 
     const results: MigrationResult[] = [];
 
@@ -73,22 +82,34 @@ export async function POST() {
           continue;
         }
 
-        // Parse the filename to extract date and vendor.
-        // Expected format: "YYYY-MM-DD - Vendor - Currency Amount - InvoiceNo.pdf"
-        const dateMatch = file.name.match(/^(\d{4}-\d{2}-\d{2})\s*-\s*([^-]+?)\s*-/);
-        if (!dateMatch) {
-          // Filename doesn't match the expected format — skip (likely a manual upload)
+        // Look up the file in our DB by drive_file_id to get the real notes
+        // (jobDetails) which contain the domain for app folder routing.
+        const indexed = byDriveId.get(file.id);
+
+        // Determine date — prefer DB transaction_date, fall back to filename parse
+        let date: string | null = indexed?.date || indexed?.transactionDate || null;
+        let vendor: string | null = indexed?.vendor || null;
+        if (!date) {
+          const dateMatch = file.name.match(/^(\d{4}-\d{2}-\d{2})\s*-\s*([^-]+?)\s*-/);
+          if (dateMatch) {
+            date = dateMatch[1];
+            if (!vendor) vendor = dateMatch[2].trim();
+          }
+        }
+        if (!date) {
+          // Cannot determine date — skip
           result.skipped++;
           continue;
         }
-        const date = dateMatch[1];
-        const vendor = dateMatch[2].trim();
 
-        // Compute destination
+        // Compute destination — pass the real notes so resolveAppFolderName can
+        // extract the domain (e.g. "autoquotation.app") instead of falling back
+        // to the vendor name ("Cloudflare, Inc.")
         const fiscalYear = getFiscalYearFolderName(date);
-        // Try to extract app from the filename's description portion (between vendor and amount/invoice).
-        // Fall back to vendor name.
-        const appName = resolveAppFolderName({ description: file.name, vendor });
+        const appName = resolveAppFolderName({
+          description: indexed?.notes || file.name,
+          vendor,
+        });
 
         try {
           const fyFolderId = await resolveOrCreateFolder(folderId, fiscalYear);
