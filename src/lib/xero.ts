@@ -281,6 +281,38 @@ export async function createInvoice(invoice: {
   });
 }
 
+/**
+ * Apply a payment to an existing Xero bill or invoice. POSTs to /Payments
+ * with the bill's InvoiceID. Used by the auto-reconcile feature when a Wise
+ * transfer is matched against an open Xero bill with high confidence.
+ *
+ * Andrea's April 2026 checklist item #1.
+ *
+ * @returns The created Payment record from Xero
+ */
+export async function applyPaymentToBill(payment: {
+  invoiceId: string;
+  amount: number;
+  date: string;            // YYYY-MM-DD
+  reference?: string;
+  accountCode?: string;    // Bank account code that the payment came FROM
+}): Promise<{ Payments: Array<{ PaymentID: string; Status: string }> }> {
+  return xeroPost<{ Payments: Array<{ PaymentID: string; Status: string }> }>("/Payments", {
+    Payments: [
+      {
+        Invoice: { InvoiceID: payment.invoiceId },
+        // Account that the money came FROM (a bank/wallet account in Xero).
+        // Defaults to the same account code we use for createBill, which is
+        // a sensible fallback. Andrea may want to override this later.
+        Account: { Code: payment.accountCode || "200" },
+        Date: payment.date,
+        Amount: payment.amount,
+        Reference: payment.reference || "",
+      },
+    ],
+  });
+}
+
 // ===== Public API =====
 
 export function isXeroConnected(): boolean {

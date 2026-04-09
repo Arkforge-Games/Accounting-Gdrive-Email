@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createBill, getCachedXeroData } from "@/lib/xero";
+import { createBill, applyPaymentToBill, getCachedXeroData } from "@/lib/xero";
 import { getPayables, PayableRow } from "@/lib/sheets";
 import { getCachedWiseData, getBusinessProfile, getAllTransfers, WiseTransfer } from "@/lib/wise";
+import * as db from "@/lib/db";
 
 export async function POST(req: NextRequest) {
   try {
@@ -235,6 +236,72 @@ export async function POST(req: NextRequest) {
         const order = { high: 0, medium: 1, low: 2 };
         matches.sort((a, b) => order[a.confidence] - order[b.confidence]);
 
+        // Auto-apply payments to Xero for high-confidence matches if requested.
+        // Andrea's April 2026 checklist item #1.
+        const autoApply = body.autoApply === true;
+        const applied: Array<{ billId: string; invoiceNumber: string; vendor: string; amount: number; paymentId: string }> = [];
+        const applyErrors: Array<{ billId: string; error: string }> = [];
+        const skipped: Array<{ billId: string; reason: string }> = [];
+
+        if (autoApply) {
+          const runId = crypto.randomUUID();
+          db.logPipeline({ runId, action: "auto_reconcile_start", status: "success", details: `${matches.length} matches found, processing high-confidence` });
+
+          // Track which bills we've already paid in this run to avoid double-application
+          const paidBillIds = new Set<string>();
+
+          for (const match of matches) {
+            if (match.confidence !== "high") continue;
+            if (paidBillIds.has(match.bill.id)) {
+              skipped.push({ billId: match.bill.id, reason: "Bill already paid earlier in this run" });
+              continue;
+            }
+            try {
+              const transferDate = match.transfer.date.substring(0, 10);
+              const reference = `Wise #${match.transfer.id} — ${match.bill.number || match.bill.id}`;
+              const paymentRes = await applyPaymentToBill({
+                invoiceId: match.bill.id,
+                amount: match.bill.amount,
+                date: transferDate,
+                reference,
+              });
+              const paymentId = paymentRes.Payments?.[0]?.PaymentID || "";
+              applied.push({
+                billId: match.bill.id,
+                invoiceNumber: match.bill.number,
+                vendor: match.bill.vendor,
+                amount: match.bill.amount,
+                paymentId,
+              });
+              paidBillIds.add(match.bill.id);
+              db.logPipeline({
+                runId,
+                action: "xero_apply_payment",
+                status: "success",
+                result: paymentId,
+                details: `${match.bill.vendor} ${match.bill.currency} ${match.bill.amount} → bill ${match.bill.number}`,
+              });
+            } catch (err) {
+              const message = err instanceof Error ? err.message : "Unknown error";
+              applyErrors.push({ billId: match.bill.id, error: message });
+              db.logPipeline({
+                runId,
+                action: "xero_apply_payment",
+                status: "error",
+                error: message,
+                details: `${match.bill.vendor} ${match.bill.currency} ${match.bill.amount} → bill ${match.bill.number}`,
+              });
+            }
+          }
+
+          db.logPipeline({
+            runId,
+            action: "auto_reconcile_end",
+            status: "success",
+            details: `Applied ${applied.length}, errors ${applyErrors.length}, skipped ${skipped.length}`,
+          });
+        }
+
         return NextResponse.json({
           success: true,
           summary: {
@@ -244,8 +311,14 @@ export async function POST(req: NextRequest) {
             highConfidence: matches.filter((m) => m.confidence === "high").length,
             mediumConfidence: matches.filter((m) => m.confidence === "medium").length,
             lowConfidence: matches.filter((m) => m.confidence === "low").length,
+            autoApplied: applied.length,
+            applyErrors: applyErrors.length,
+            applySkipped: skipped.length,
           },
           matches,
+          applied,
+          applyErrors,
+          skipped,
         });
       }
 
