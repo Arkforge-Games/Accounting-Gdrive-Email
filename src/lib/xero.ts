@@ -313,6 +313,49 @@ export async function applyPaymentToBill(payment: {
   });
 }
 
+/**
+ * Create a Xero bank transaction (Spend Money or Receive Money) — used when
+ * reconciling a bank statement line that does NOT match an existing bill.
+ * The "Create" tab in Xero's bank reconciliation UI.
+ *
+ * Andrea's April 2026 checklist item #1 (v2). The accountCode here is the
+ * "What" the user picks from Xero's chart-of-accounts dropdown — we pick it
+ * via AI based on the bank narration.
+ */
+export async function createBankTransaction(tx: {
+  type: "RECEIVE" | "SPEND";    // RECEIVE = money in, SPEND = money out
+  bankAccountCode: string;       // Which bank account this transaction belongs to (the "from" account)
+  contactName: string;           // Who
+  date: string;                  // YYYY-MM-DD
+  description: string;           // Why
+  amount: number;                // Total amount
+  accountCode: string;           // What — the chart-of-accounts code for the categorization
+  currencyCode?: string;
+  reference?: string;
+}): Promise<unknown> {
+  return xeroPost("/BankTransactions", {
+    BankTransactions: [
+      {
+        Type: tx.type,
+        Contact: { Name: tx.contactName },
+        BankAccount: { Code: tx.bankAccountCode },
+        Date: tx.date,
+        Reference: tx.reference || "",
+        LineItems: [
+          {
+            Description: tx.description,
+            Quantity: 1,
+            UnitAmount: tx.amount,
+            AccountCode: tx.accountCode,
+          },
+        ],
+        CurrencyCode: tx.currencyCode || "HKD",
+        Status: "AUTHORISED",
+      },
+    ],
+  });
+}
+
 // ===== Public API =====
 
 export function isXeroConnected(): boolean {

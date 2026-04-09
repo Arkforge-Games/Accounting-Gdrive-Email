@@ -5,6 +5,7 @@ import { fetchEmailAttachments } from "@/lib/imap";
 import { isWiseConfigured, syncWiseData } from "@/lib/wise";
 import { runWisePipeline } from "@/lib/wise-pipeline";
 import { isXeroConnected, syncXeroData } from "@/lib/xero";
+import { runXeroReconcile } from "@/lib/xero-reconcile";
 import { google } from "googleapis";
 import type { SyncFile, SyncResult } from "@/lib/types";
 import { Readable } from "stream";
@@ -326,6 +327,29 @@ export async function POST(req: NextRequest) {
         errors: [],
         timestamp: new Date().toISOString(),
       });
+
+      // Andrea's April 2026 checklist item #1: after Xero data is fetched,
+      // run the auto-reconciliation pipeline. For each unreconciled bank
+      // transaction, try to match it against an open bill/invoice and
+      // auto-apply payment.
+      try {
+        const reconcile = await runXeroReconcile({ autoApply: true });
+        results.push({
+          source: "xero-reconcile",
+          filesAdded: reconcile.matchedAndPaid + reconcile.createdNew,
+          filesUpdated: reconcile.matchedAndPaid,
+          errors: reconcile.errors > 0 ? [`${reconcile.errors} reconcile errors`] : [],
+          timestamp: new Date().toISOString(),
+        });
+      } catch (err) {
+        results.push({
+          source: "xero-reconcile",
+          filesAdded: 0,
+          filesUpdated: 0,
+          errors: [err instanceof Error ? err.message : "Xero reconcile failed"],
+          timestamp: new Date().toISOString(),
+        });
+      }
     } catch (err) {
       results.push({
         source: "xero",

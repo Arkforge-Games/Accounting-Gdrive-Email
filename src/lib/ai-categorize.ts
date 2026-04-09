@@ -228,6 +228,142 @@ If unsure, use "uncategorized" but try hard to match the rules above.`;
   return prompt;
 }
 
+// ===== Xero account code categorization =====
+//
+// Andrea's April 2026 checklist item #1 (v2): when auto-creating a Xero bank
+// transaction from a bank statement line, we need to pick the right "What"
+// (chart-of-accounts code). This function takes a bank statement narration
+// and a list of available accounts, and asks AI to pick the best one.
+
+export interface AccountChoice {
+  Code: string;
+  Name: string;
+  Type: string;        // "EXPENSE" | "REVENUE" | "DIRECTCOSTS" | etc.
+  Description?: string;
+}
+
+export interface AccountPickResult {
+  accountCode: string;
+  contactName: string;
+  description: string;
+  confidence: "high" | "medium" | "low";
+}
+
+/**
+ * Pick a Xero chart-of-accounts code for a bank statement line via AI.
+ *
+ * @param statementLine The bank narration text (e.g. "CHEQUE DEPOSIT LEARNING B LE..")
+ * @param amount        The transaction amount
+ * @param direction     "RECEIVE" (money in) or "SPEND" (money out)
+ * @param accounts      The list of valid Xero accounts to pick from
+ * @returns The picked account code, suggested contact name, and description
+ */
+export async function aiPickAccountCode(
+  statementLine: string,
+  amount: number,
+  direction: "RECEIVE" | "SPEND",
+  accounts: AccountChoice[],
+): Promise<AccountPickResult> {
+  // Filter to only accounts that make sense given the direction.
+  // SPEND → expenses + direct costs + fixed assets (we're paying out)
+  // RECEIVE → revenue + other income (we're receiving)
+  const relevantTypes = direction === "SPEND"
+    ? ["EXPENSE", "DIRECTCOSTS", "OVERHEADS", "FIXED", "CURRLIAB", "TERMLIAB", "DEPRECIATN"]
+    : ["REVENUE", "SALES", "OTHERINCOME", "CURRENT"];
+
+  const filtered = accounts.filter(a =>
+    relevantTypes.some(t => (a.Type || "").toUpperCase().includes(t))
+  );
+  // If filtering returned nothing, fall back to all accounts
+  const choices = filtered.length > 0 ? filtered : accounts;
+
+  // Build a compact list for the prompt
+  const accountList = choices
+    .map(a => `${a.Code} - ${a.Name}${a.Description ? " (" + a.Description.substring(0, 60) + ")" : ""}`)
+    .join("\n");
+
+  const prompt = `You are categorizing a bank statement line for HobbyLand Technology Limited's Xero accounting.
+
+BANK STATEMENT LINE:
+  Narration: ${statementLine}
+  Amount: ${amount}
+  Direction: ${direction === "SPEND" ? "Money OUT (we paid)" : "Money IN (we received)"}
+
+AVAILABLE XERO ACCOUNTS (chart of accounts):
+${accountList}
+
+Pick the BEST matching account code from the list above. Use these rules:
+- For SPEND: pick the expense/cost category (e.g. "489 Telephone & Internet" for a Cloudflare charge, "400 Advertising" for Google Ads, "477 Wages and Salaries" for payroll, "313 Service provider-Operations" for freelancer work, "404 Bank Fees" for fee charges).
+- For RECEIVE: pick the income category (e.g. "200 Sales" for customer payments, "260 Other Revenue" for misc income, "270 Interest Income" for bank interest).
+- Bank fees, transaction fees, FX charges → "404 Bank Fees"
+- SaaS subscriptions (Cloudflare, GitHub, OpenAI, Anthropic, AWS) → "489 Telephone & Internet" or "423 Computer expenses" (prefer the latter for software/cloud)
+- Domain renewals → "423 Computer expenses"
+- Google Ads → "400 Advertising"
+
+Respond with JSON only, no markdown:
+{
+  "accountCode": "the picked code as a string e.g. \\"489\\"",
+  "contactName": "extracted vendor/customer name from narration (e.g. \\"Cloudflare, Inc.\\" or \\"HSBC\\") or empty string",
+  "description": "one-line description for the Xero entry (e.g. \\"Bank fee\\" or \\"Cloudflare domain renewal\\")",
+  "confidence": "high|medium|low"
+}`;
+
+  if (!OPENROUTER_KEY) {
+    return { accountCode: "479", contactName: "", description: statementLine.substring(0, 80), confidence: "low" }; // 479 = Sundry
+  }
+
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${OPENROUTER_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      messages: [
+        { role: "system", content: "You are a careful accounting categorizer. Respond ONLY with valid JSON, no markdown." },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.1,
+      max_tokens: 200,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`OpenRouter API error: ${res.status} ${err}`);
+  }
+
+  const data = await res.json();
+  const content = data.choices?.[0]?.message?.content || "";
+
+  try {
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    const json = jsonMatch ? jsonMatch[0] : content;
+    const parsed = JSON.parse(json);
+    // Validate the picked code is actually in the list
+    const validCodes = new Set(choices.map(c => c.Code));
+    let pickedCode = String(parsed.accountCode || "").trim();
+    if (!validCodes.has(pickedCode)) {
+      // AI hallucinated a code — fall back to a sensible default
+      pickedCode = direction === "SPEND" ? "479" : "260"; // Sundry expenses / Other Revenue
+    }
+    return {
+      accountCode: pickedCode,
+      contactName: String(parsed.contactName || "").trim(),
+      description: String(parsed.description || statementLine).trim().substring(0, 200),
+      confidence: ["high", "medium", "low"].includes(parsed.confidence) ? parsed.confidence : "medium",
+    };
+  } catch {
+    return {
+      accountCode: direction === "SPEND" ? "479" : "260",
+      contactName: "",
+      description: statementLine.substring(0, 80),
+      confidence: "low",
+    };
+  }
+}
+
 function parseAIResponse(content: string): AICategorizeResult {
   // Extract JSON from response (handle markdown code blocks)
   let json = content;
