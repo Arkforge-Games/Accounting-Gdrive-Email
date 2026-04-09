@@ -12,21 +12,34 @@ import { getAuthenticatedClient } from "@/lib/google";
 
 const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID || "1gCGR0fEruEdwVNe2qx9U2hAb7cIqjWcMHVae_iH_MsE";
 
-// GET /api/admin/clear-broken-rows?from=182&to=200 — clear an explicit range
+// GET /api/admin/clear-broken-rows?from=182&to=200&cols=R     — clear A..R for rows
+//     /api/admin/clear-broken-rows?from=182&to=200&cols=AG    — clear A..AG for rows
+//     /api/admin/clear-broken-rows?inspect=1&from=182&to=200  — read raw cells
 export async function GET(req: NextRequest) {
   try {
     const from = parseInt(req.nextUrl.searchParams.get("from") || "0", 10);
     const to = parseInt(req.nextUrl.searchParams.get("to") || "0", 10);
+    const cols = req.nextUrl.searchParams.get("cols") || "R";
+    const inspect = req.nextUrl.searchParams.get("inspect") === "1";
     if (!from || !to || from > to) {
       return NextResponse.json({ error: "from and to query params required" }, { status: 400 });
     }
     const auth = getAuthenticatedClient();
     const sheets = google.sheets({ version: "v4", auth });
+
+    if (inspect) {
+      const res = await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `Payable!A${from}:${cols}${to}`,
+      });
+      return NextResponse.json({ range: res.data.range, values: res.data.values });
+    }
+
     await sheets.spreadsheets.values.clear({
       spreadsheetId: SPREADSHEET_ID,
-      range: `Payable!A${from}:R${to}`,
+      range: `Payable!A${from}:${cols}${to}`,
     });
-    return NextResponse.json({ cleared: to - from + 1, range: `${from}-${to}` });
+    return NextResponse.json({ cleared: to - from + 1, range: `A${from}:${cols}${to}` });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Unknown" }, { status: 500 });
   }
