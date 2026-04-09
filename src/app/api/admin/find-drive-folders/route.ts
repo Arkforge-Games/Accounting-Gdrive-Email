@@ -41,9 +41,27 @@ export async function GET() {
         supportsAllDrives: true,
         corpora: "allDrives",
       });
+      // Count files in each subfolder
+      const subfolders = await Promise.all(
+        (sub.data.files || []).map(async (f) => {
+          const filesIn = await drive.files.list({
+            q: `'${f.id}' in parents and mimeType!='application/vnd.google-apps.folder' and trashed=false`,
+            fields: "files(id)",
+            pageSize: 1000,
+            includeItemsFromAllDrives: true,
+            supportsAllDrives: true,
+            corpora: "allDrives",
+          });
+          return {
+            id: f.id || "",
+            name: f.name || "",
+            fileCount: (filesIn.data.files || []).length,
+          };
+        })
+      );
       result.push({
         parent: { id: parent.id, name: parent.name || "" },
-        subfolders: (sub.data.files || []).map(f => ({ id: f.id || "", name: f.name || "" })),
+        subfolders,
       });
     }
     return NextResponse.json({ found: result });
