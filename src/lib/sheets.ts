@@ -1,6 +1,6 @@
 import { google } from "googleapis";
 import { getAuthenticatedClient } from "./google";
-import { setDataCache, getDataCache } from "./db";
+import { setDataCache, getDataCache, getWiseCache } from "./db";
 
 const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID || "1gCGR0fEruEdwVNe2qx9U2hAb7cIqjWcMHVae_iH_MsE";
 
@@ -347,7 +347,9 @@ export function convertToHkd(amount: number, currency: string): number | null {
   if (!cur || cur === "HKD") return amount;
   if (!isFinite(amount) || amount <= 0) return null;
 
-  const cached = getDataCache("wise", "exchange_rates");
+  // Wise's syncWiseData stores rates in the wise_cache table (not data_cache).
+  // The keys are "X_HKD" pairs e.g. "USD_HKD", "PHP_HKD", "SGD_HKD".
+  const cached = getWiseCache("exchange_rates");
   const rates = (cached?.data as Record<string, number> | undefined) || {};
 
   // Direct rate: X → HKD
