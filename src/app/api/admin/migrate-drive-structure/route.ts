@@ -43,120 +43,111 @@ export async function POST() {
     const auth = getAuthenticatedClient();
     const drive = google.drive({ version: "v3", auth });
 
-    // Build a lookup from Drive file ID → file_index row so we can use the
-    // real notes/vendor (not the filename) when computing the app folder.
-    const indexedFiles = db.getIndexedFiles({});
-    const byDriveId = new Map<string, db.IndexedFile>();
-    for (const f of indexedFiles) {
-      if (f.driveFileId) byDriveId.set(f.driveFileId, f);
+    // Iterate from the DB side: every file_index row that has a drive_file_id
+    // is a previously-uploaded receipt. Look up its current Drive location,
+    // compute where it should be, and move it if different.
+    const indexedFiles = db.getIndexedFiles({}).filter(f => f.driveFileId);
+
+    // Reverse-lookup: which env var folder ID maps to which category name
+    const folderIdToCategory: Record<string, string> = {};
+    for (const [name, id] of Object.entries(CATEGORY_FOLDER_IDS)) {
+      if (id) folderIdToCategory[id] = name;
     }
 
-    const results: MigrationResult[] = [];
+    const result: MigrationResult = {
+      category: "all",
+      scanned: indexedFiles.length,
+      moved: 0,
+      skipped: 0,
+      errors: 0,
+      movedFiles: [],
+    };
 
-    for (const [categoryName, folderId] of Object.entries(CATEGORY_FOLDER_IDS)) {
-      if (!folderId) continue;
+    for (const f of indexedFiles) {
+      if (!f.driveFileId) continue;
 
-      // List ONLY non-folder children (PDFs etc.) of this top-level folder
-      const list = await drive.files.list({
-        q: `'${folderId}' in parents and mimeType!='application/vnd.google-apps.folder' and trashed=false`,
-        fields: "files(id,name,parents)",
-        pageSize: 1000,
-        includeItemsFromAllDrives: true,
-        supportsAllDrives: true,
-        corpora: "allDrives",
-      });
-
-      const files = list.data.files || [];
-      const result: MigrationResult = {
-        category: categoryName,
-        scanned: files.length,
-        moved: 0,
-        skipped: 0,
-        errors: 0,
-        movedFiles: [],
-      };
-
-      for (const file of files) {
-        if (!file.id || !file.name) {
-          result.errors++;
-          continue;
-        }
-
-        // Look up the file in our DB by drive_file_id to get the real notes
-        // (jobDetails) which contain the domain for app folder routing.
-        const indexed = byDriveId.get(file.id);
-
-        // Determine date — prefer DB transaction_date, fall back to filename parse
-        let date: string | null = indexed?.date || indexed?.transactionDate || null;
-        let vendor: string | null = indexed?.vendor || null;
-        if (!date) {
-          const dateMatch = file.name.match(/^(\d{4}-\d{2}-\d{2})\s*-\s*([^-]+?)\s*-/);
-          if (dateMatch) {
-            date = dateMatch[1];
-            if (!vendor) vendor = dateMatch[2].trim();
-          }
-        }
-        if (!date) {
-          // Cannot determine date — skip
+      try {
+        // Get current Drive parents
+        const meta = await drive.files.get({
+          fileId: f.driveFileId,
+          fields: "id,name,parents",
+          supportsAllDrives: true,
+        });
+        const currentParents = meta.data.parents || [];
+        if (currentParents.length === 0) {
           result.skipped++;
           continue;
         }
 
-        // Compute destination — pass the real notes so resolveAppFolderName can
-        // extract the domain (e.g. "autoquotation.app") instead of falling back
-        // to the vendor name ("Cloudflare, Inc.")
+        // Walk up to find the top-level category folder.
+        // Strategy: any current parent (or grandparent) that matches one of our
+        // configured category folder IDs is the category we route under.
+        let categoryFolderId: string | null = null;
+        for (const pid of currentParents) {
+          if (folderIdToCategory[pid]) { categoryFolderId = pid; break; }
+        }
+        if (!categoryFolderId) {
+          // Walk up parents recursively (max 5 levels) to find the category
+          let cursor = currentParents[0];
+          for (let i = 0; i < 5 && cursor && !categoryFolderId; i++) {
+            const parentMeta = await drive.files.get({
+              fileId: cursor,
+              fields: "id,parents",
+              supportsAllDrives: true,
+            });
+            if (folderIdToCategory[cursor]) { categoryFolderId = cursor; break; }
+            cursor = parentMeta.data.parents?.[0] || "";
+          }
+        }
+        if (!categoryFolderId) {
+          // Could not determine the category — skip
+          result.skipped++;
+          continue;
+        }
+
+        // Compute target nested location
+        const date = f.transactionDate || f.date;
+        if (!date) { result.skipped++; continue; }
         const fiscalYear = getFiscalYearFolderName(date);
-        const appName = resolveAppFolderName({
-          description: indexed?.notes || file.name,
-          vendor,
+        const appName = resolveAppFolderName({ description: f.notes, vendor: f.vendor });
+        const fyFolderId = await resolveOrCreateFolder(categoryFolderId, fiscalYear);
+        const appFolderId = await resolveOrCreateFolder(fyFolderId, appName);
+
+        // Skip if already in the right place
+        if (currentParents.includes(appFolderId)) {
+          result.skipped++;
+          continue;
+        }
+
+        // Move: addParents=appFolderId, removeParents=current
+        await drive.files.update({
+          fileId: f.driveFileId,
+          addParents: appFolderId,
+          removeParents: currentParents.join(","),
+          fields: "id,parents",
+          supportsAllDrives: true,
         });
 
-        try {
-          const fyFolderId = await resolveOrCreateFolder(folderId, fiscalYear);
-          const appFolderId = await resolveOrCreateFolder(fyFolderId, appName);
-
-          // Skip if already in the right place
-          const currentParents = file.parents || [];
-          if (currentParents.includes(appFolderId)) {
-            result.skipped++;
-            continue;
-          }
-
-          // Move: addParents=appFolderId, removeParents=current
-          await drive.files.update({
-            fileId: file.id,
-            addParents: appFolderId,
-            removeParents: currentParents.join(","),
-            fields: "id,parents",
-            supportsAllDrives: true,
-          });
-
-          result.moved++;
-          result.movedFiles.push({
-            name: file.name,
-            newPath: `${categoryName}/${fiscalYear}/${appName}/`,
-          });
-        } catch (err) {
-          console.error(`[migrate] failed to move ${file.name}:`, err instanceof Error ? err.message : err);
-          result.errors++;
-        }
+        result.moved++;
+        result.movedFiles.push({
+          name: meta.data.name || f.name,
+          newPath: `${folderIdToCategory[categoryFolderId]}/${fiscalYear}/${appName}/`,
+        });
+      } catch (err) {
+        console.error(`[migrate] failed for ${f.driveFileId}:`, err instanceof Error ? err.message : err);
+        result.errors++;
       }
-
-      results.push(result);
     }
-
-    const totalMoved = results.reduce((s, r) => s + r.moved, 0);
-    const totalSkipped = results.reduce((s, r) => s + r.skipped, 0);
-    const totalErrors = results.reduce((s, r) => s + r.errors, 0);
 
     return NextResponse.json({
       success: true,
       summary: {
-        totalMoved,
-        totalSkipped,
-        totalErrors,
+        totalMoved: result.moved,
+        totalSkipped: result.skipped,
+        totalErrors: result.errors,
+        scanned: result.scanned,
       },
-      details: results,
+      movedFiles: result.movedFiles,
     });
   } catch (err) {
     return NextResponse.json(
