@@ -156,6 +156,24 @@ function initSchema(db: Database.Database) {
       updated_at TEXT DEFAULT (datetime('now'))
     );
 
+    -- wise_processed: tracks Wise transfers that have been processed by the
+    -- wise-pipeline so we never reprocess them. Each row represents one
+    -- transfer that was either matched against an existing sheet row (status
+    -- updated to Paid) or appended as a new sheet row.
+    -- Andrea's April 2026 checklist item #5.
+    CREATE TABLE IF NOT EXISTS wise_processed (
+      transfer_id TEXT PRIMARY KEY,
+      recipient_name TEXT,
+      amount TEXT,
+      currency TEXT,
+      transfer_date TEXT,
+      sheet_type TEXT,
+      action TEXT,                       -- 'appended' or 'matched_existing'
+      sheet_row_index INTEGER,
+      processed_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_wise_processed_recipient ON wise_processed(recipient_name);
+
     CREATE TABLE IF NOT EXISTS google_tokens (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       tokens TEXT NOT NULL,
@@ -995,6 +1013,56 @@ export function getUnrecordedFiles(): IndexedFile[] {
 
   const all = getIndexedFiles({});
   return all.filter(f => !recordedIds.has(f.id));
+}
+
+// ===== Wise pipeline =====
+
+export interface WiseProcessedRow {
+  transferId: string;
+  recipientName: string | null;
+  amount: string | null;
+  currency: string | null;
+  transferDate: string | null;
+  sheetType: string | null;
+  action: string;
+  sheetRowIndex: number | null;
+  processedAt: string;
+}
+
+export function isWiseTransferProcessed(transferId: string): boolean {
+  const row = getDb().prepare("SELECT 1 FROM wise_processed WHERE transfer_id = ?").get(transferId);
+  return !!row;
+}
+
+export function markWiseTransferProcessed(entry: {
+  transferId: string;
+  recipientName?: string | null;
+  amount?: string | null;
+  currency?: string | null;
+  transferDate?: string | null;
+  sheetType?: string | null;
+  action: "appended" | "matched_existing" | "skipped";
+  sheetRowIndex?: number | null;
+}) {
+  getDb().prepare(`
+    INSERT OR REPLACE INTO wise_processed
+      (transfer_id, recipient_name, amount, currency, transfer_date, sheet_type, action, sheet_row_index)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    entry.transferId,
+    entry.recipientName || null,
+    entry.amount || null,
+    entry.currency || null,
+    entry.transferDate || null,
+    entry.sheetType || null,
+    entry.action,
+    entry.sheetRowIndex ?? null,
+  );
+}
+
+export function getProcessedWiseCount(): number {
+  const row = getDb().prepare("SELECT COUNT(*) AS c FROM wise_processed").get() as { c: number };
+  return row.c;
 }
 
 // ===== Chat Conversations =====

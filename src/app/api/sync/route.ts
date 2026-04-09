@@ -3,6 +3,7 @@ import * as db from "@/lib/db";
 import { getTokens, getAuthenticatedClient, extractFolderId } from "@/lib/google";
 import { fetchEmailAttachments } from "@/lib/imap";
 import { isWiseConfigured, syncWiseData } from "@/lib/wise";
+import { runWisePipeline } from "@/lib/wise-pipeline";
 import { isXeroConnected, syncXeroData } from "@/lib/xero";
 import { google } from "googleapis";
 import type { SyncFile, SyncResult } from "@/lib/types";
@@ -345,6 +346,28 @@ export async function POST(req: NextRequest) {
         errors: [],
         timestamp: new Date().toISOString(),
       });
+
+      // Andrea's April 2026 checklist item #5: after caching Wise data,
+      // run the Wise pipeline to categorize transfers and append/match them
+      // to the Payable sheet.
+      try {
+        const wisePipeline = await runWisePipeline();
+        results.push({
+          source: "wise-pipeline",
+          filesAdded: wisePipeline.appended,
+          filesUpdated: wisePipeline.matchedExisting,
+          errors: wisePipeline.errors > 0 ? [`${wisePipeline.errors} errors during processing`] : [],
+          timestamp: new Date().toISOString(),
+        });
+      } catch (err) {
+        results.push({
+          source: "wise-pipeline",
+          filesAdded: 0,
+          filesUpdated: 0,
+          errors: [err instanceof Error ? err.message : "Wise pipeline failed"],
+          timestamp: new Date().toISOString(),
+        });
+      }
     } catch (err) {
       results.push({
         source: "wise",
