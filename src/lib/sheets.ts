@@ -376,15 +376,18 @@ export function formatHkd(amount: number): string {
 
 /**
  * Build the Running Balance formula for column R at a given row.
- * Uses a SUM formula so the balance auto-recalculates when rows are
- * edited or deleted — Andrea's feedback (2026-04-10).
+ * Uses SUMPRODUCT to extract numbers from the "HKD 1,234.56" text in
+ * column Q, so the balance auto-recalculates when rows are edited/deleted.
  *
- * Formula: =SUM(Q$9:Q{row})
- * This sums all HKD debit values from the start of data (row 9) down
- * to the current row, giving a cumulative running balance.
+ * Andrea's feedback (2026-04-10): use a formula, not static values.
+ *
+ * The SUMPRODUCT + VALUE + SUBSTITUTE approach handles Q values that are
+ * text strings with "HKD " prefix and comma thousand separators.
  */
 export function buildRunningBalanceFormula(row: number): string {
-  return `=SUM(Q$9:Q${row})`;
+  // SUMPRODUCT iterates each cell in Q$9:Q{row}, strips "HKD " and commas,
+  // converts to number via VALUE, falls back to 0 for empty/non-numeric cells
+  return `=SUMPRODUCT(IFERROR(VALUE(SUBSTITUTE(SUBSTITUTE(Q$9:Q${row},"HKD ",""),",","")),0))`;
 }
 
 // ===== Sync & Cache =====
