@@ -20,9 +20,18 @@
 import * as db from "./db";
 import { getCachedWiseData, WiseTransfer, WiseRecipient } from "./wise";
 import { appendPayableRow, getPayables, convertToHkd, formatHkd, updatePayableCell, getCurrentRunningBalance } from "./sheets";
+import { createBankTransaction, isXeroConnected } from "./xero";
 
 /** Throttle Sheets API calls — 60/min read+write quota per user. */
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/** Map sheetType to Xero chart-of-accounts code. */
+const XERO_ACCOUNT_CODES: Record<string, string> = {
+  "Staff": "477",       // Wages and Salaries
+  "Payroll": "477",     // Wages and Salaries
+  "Freelancer": "313",  // Service provider-Operations
+  "Supplier": "429",    // General Expenses
+};
 
 export interface WisePipelineResult {
   runId: string;
@@ -260,6 +269,108 @@ export async function runWisePipeline(): Promise<WisePipelineResult> {
           details: `Transfer ${transferId}`,
         });
         result.errors++;
+      }
+    }
+
+    // ===== Create Xero bank transactions for batch payments =====
+    // Group this run's appended transfers by date (day) to create one Xero
+    // SPEND entry per batch. Andrea wants: WHO=all recipients, WHAT=477/313,
+    // WHY="Staff payments [Month Year]"
+    if (isXeroConnected() && result.appended > 0) {
+      try {
+        // Collect all transfers we just appended in this run
+        const appendedTransfers: Array<{
+          recipientName: string;
+          sourceValue: number;
+          sourceCurrency: string;
+          date: string;
+          sheetType: string;
+        }> = [];
+
+        for (const t of outgoing) {
+          const tid = String(t.id);
+          // Only include transfers we appended in THIS run (not previously processed)
+          // Check if this transfer was just processed as "appended"
+          if (!db.isWiseTransferProcessed(tid)) continue;
+          const recipientName = recipientLookup.get(t.targetAccount) || t.details?.reference || t.reference || "";
+          const { sheetType } = classifyWiseTransfer(recipientName, t.details?.reference || t.reference || "");
+          appendedTransfers.push({
+            recipientName,
+            sourceValue: t.sourceValue,
+            sourceCurrency: t.sourceCurrency,
+            date: t.created,
+            sheetType,
+          });
+        }
+
+        // Group by date (day) to create one Xero entry per batch
+        const byDate = new Map<string, typeof appendedTransfers>();
+        for (const t of appendedTransfers) {
+          const day = new Date(t.date).toISOString().substring(0, 10);
+          const existing = byDate.get(day) || [];
+          existing.push(t);
+          byDate.set(day, existing);
+        }
+
+        for (const [day, transfers] of byDate) {
+          if (transfers.length === 0) continue;
+          const totalSource = transfers.reduce((s, t) => s + t.sourceValue, 0);
+          const currency = transfers[0].sourceCurrency || "HKD";
+
+          // WHO = all unique recipients
+          const recipientNames = [...new Set(transfers.map(t => t.recipientName).filter(Boolean))];
+          const who = recipientNames.join(", ").substring(0, 200) || "Wise batch payment";
+
+          // WHAT = dominant type's account code
+          const typeCounts: Record<string, number> = {};
+          for (const t of transfers) {
+            typeCounts[t.sheetType] = (typeCounts[t.sheetType] || 0) + 1;
+          }
+          const dominantType = Object.entries(typeCounts).sort(([, a], [, b]) => b - a)[0]?.[0] || "Staff";
+          const accountCode = XERO_ACCOUNT_CODES[dominantType] || "477";
+
+          // WHY = "Staff payments [Month Year]"
+          const month = new Date(day).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+          const typeLabel = dominantType === "Freelancer" ? "Freelancer" : "Staff";
+          const why = `${typeLabel} payments ${month} (${transfers.length} transfers via Wise)`;
+
+          try {
+            await createBankTransaction({
+              type: "SPEND",
+              bankAccountCode: "100", // Default bank account
+              contactName: who,
+              date: day,
+              description: why,
+              amount: totalSource,
+              accountCode,
+              currencyCode: currency,
+              reference: `Wise batch ${day}`,
+            });
+            db.logPipeline({
+              runId,
+              action: "xero_wise_batch_created",
+              status: "success",
+              result: accountCode,
+              details: `${who.substring(0, 60)} — ${why} — ${currency} ${totalSource}`,
+            });
+          } catch (err) {
+            db.logPipeline({
+              runId,
+              action: "xero_wise_batch_created",
+              status: "error",
+              error: err instanceof Error ? err.message : "Xero create failed",
+              details: `Batch ${day}: ${transfers.length} transfers, ${currency} ${totalSource}`,
+            });
+          }
+          await sleep(1000);
+        }
+      } catch (err) {
+        db.logPipeline({
+          runId,
+          action: "xero_wise_batch",
+          status: "error",
+          error: err instanceof Error ? err.message : "Batch creation failed",
+        });
       }
     }
 
