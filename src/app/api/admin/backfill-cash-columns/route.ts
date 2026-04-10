@@ -13,7 +13,7 @@
 import { NextResponse } from "next/server";
 import { google } from "googleapis";
 import { getAuthenticatedClient } from "@/lib/google";
-import { getPayables, convertToHkd, formatHkd } from "@/lib/sheets";
+import { getPayables, convertToHkd, formatHkd, buildRunningBalanceFormula } from "@/lib/sheets";
 
 const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID || "1gCGR0fEruEdwVNe2qx9U2hAb7cIqjWcMHVae_iH_MsE";
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -49,13 +49,12 @@ export async function POST() {
     const payables = await getPayables();
     payables.sort((a, b) => a.rowIndex - b.rowIndex);
 
-    let runningBalance = 0;
     let updated = 0;
     let skipped = 0;
     let noRate = 0;
-    const writes: Array<{ row: number; q: string; r: string }> = [];
+    const writes: Array<{ row: number; q: string; rFormula: string }> = [];
 
-    // First pass: compute everything in memory
+    // First pass: compute HKD values and build SUM formulas
     for (const p of payables) {
       // Skip reimbursements
       if (REIMBURSEMENT_TYPES.has(p.type || "")) {
@@ -73,11 +72,11 @@ export async function POST() {
         noRate++;
         continue;
       }
-      runningBalance += hkd;
       writes.push({
         row: p.rowIndex,
         q: formatHkd(hkd),
-        r: formatHkd(runningBalance),
+        // Running Balance as a SUM formula — auto-recalculates when rows change
+        rFormula: buildRunningBalanceFormula(p.rowIndex),
       });
     }
 
@@ -88,12 +87,12 @@ export async function POST() {
     for (let i = 0; i < writes.length; i += BATCH_SIZE) {
       const batch = writes.slice(i, i + BATCH_SIZE);
       const data = batch.flatMap(w => [
-        // Column I (Conversion) — Andrea wants HKD shown here too
+        // Column I (Conversion) — HKD equivalent
         { range: `Payable!I${w.row}`, values: [[w.q]] },
         // Column Q (Debit / Money Out)
         { range: `Payable!Q${w.row}`, values: [[w.q]] },
-        // Column R (Running Balance)
-        { range: `Payable!R${w.row}`, values: [[w.r]] },
+        // Column R (Running Balance) — SUM formula, auto-recalculates
+        { range: `Payable!R${w.row}`, values: [[w.rFormula]] },
       ]);
       await sheets.spreadsheets.values.batchUpdate({
         spreadsheetId: SPREADSHEET_ID,
@@ -115,7 +114,7 @@ export async function POST() {
         updated,
         skippedReimbursementOrEmpty: skipped,
         noExchangeRate: noRate,
-        finalRunningBalance: formatHkd(runningBalance),
+        runningBalanceType: "SUM formula (auto-recalculates)",
       },
     });
   } catch (err) {

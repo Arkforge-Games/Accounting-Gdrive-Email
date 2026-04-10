@@ -10,7 +10,7 @@
 import * as db from "./db";
 import { categorizeFile, extractAmountFromBody } from "./categorize";
 import { isAIConfigured, aiCategorizeFile } from "./ai-categorize";
-import { appendPayableRow, appendReceivableRow, getPayables, getReceivables, convertToHkd, formatHkd, getCurrentRunningBalance } from "./sheets";
+import { appendPayableRow, appendReceivableRow, getPayables, getReceivables, convertToHkd, formatHkd } from "./sheets";
 import { uploadToDrive, getDriveFolderForSheetType, buildDriveFilename, resolveOrCreateFolder, getFiscalYearFolderName, resolveAppFolderName } from "./drive-upload";
 
 /** Sleep helper to throttle Google Sheets writes (max 60/min) */
@@ -130,18 +130,6 @@ export async function runPipeline(): Promise<PipelineResult> {
     // identical (vendor, amount, date) being written in the same run.
     const writtenInRun = new Set<string>();
 
-    // Cash running balance — read once at the start of the run, then keep
-    // it in memory so we don't re-read the column for every row. New HKD
-    // amounts (column Q) are added to this running total and the new
-    // total is written to column R alongside.
-    // Andrea's April checklist item #4: only NON-reimbursement payables.
-    let runningBalanceHkd = 0;
-    try {
-      runningBalanceHkd = await getCurrentRunningBalance();
-    } catch (err) {
-      db.logPipeline({ runId, action: "running_balance_init", status: "error", error: err instanceof Error ? err.message : "Failed to read column Q" });
-    }
-
     for (const file of unrecorded) {
       try {
 
@@ -209,17 +197,15 @@ export async function runPipeline(): Promise<PipelineResult> {
             // can click. Falls back to the proxy URL if upload fails.
             const finalReceiptLink = await uploadReceiptToDrive(file, sheetType, file.category) || receiptLink;
 
-            // Cash columns Q & R — HKD equivalent + running balance.
+            // Cash column Q — HKD equivalent. Column R uses a SUM formula
+            // (auto-set by appendPayableRow) so we don't track it here.
             // EXCLUDE reimbursements per Andrea's checklist item #4.
             let debitCell = "";
-            let runningBalanceCell = "";
             if (file.category !== "reimbursement" && file.amount) {
               const amt = parseFloat(file.amount);
               const hkd = convertToHkd(amt, file.currency);
               if (hkd !== null) {
                 debitCell = formatHkd(hkd);
-                runningBalanceHkd += hkd;
-                runningBalanceCell = formatHkd(runningBalanceHkd);
               }
             }
 
@@ -240,7 +226,7 @@ export async function runPipeline(): Promise<PipelineResult> {
               account: "HobbyLand",
               receiptCreated: "TRUE",
               debit: debitCell,
-              runningBalance: runningBalanceCell,
+              // Column R (Running Balance) is auto-set as a SUM formula by appendPayableRow
             });
             db.logPipeline({ runId, fileId: file.id, action: "record", status: "success", result: "payable", details: `${file.vendor} ${file.currency} ${file.amount}` });
             writtenInRun.add(runKey);

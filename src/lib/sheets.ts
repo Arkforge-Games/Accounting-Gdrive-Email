@@ -164,9 +164,14 @@ async function findNextEmptyRow(sheetName: string, anchorCol: string = "A", star
   return startRow + lastNonEmpty + 1;
 }
 
-export async function appendPayableRow(data: Partial<PayableRow>): Promise<void> {
+export async function appendPayableRow(data: Partial<PayableRow>): Promise<number> {
   const sheets = getSheets();
   const nextRow = await findNextEmptyRow("Payable", "A", 9);
+  // Column R (Running Balance) uses a SUM formula instead of a static value.
+  // This way the balance auto-recalculates when rows are edited/deleted.
+  const runningBalanceCell = data.debit
+    ? buildRunningBalanceFormula(nextRow)
+    : (data.runningBalance || "");
   await sheets.spreadsheets.values.update({
     spreadsheetId: SPREADSHEET_ID,
     range: `Payable!A${nextRow}:R${nextRow}`,
@@ -190,10 +195,11 @@ export async function appendPayableRow(data: Partial<PayableRow>): Promise<void>
         data.remarks || "",
         data.receiptCreated || "FALSE",
         data.debit || "",
-        data.runningBalance || "",
+        runningBalanceCell,
       ]],
     },
   });
+  return nextRow;
 }
 
 export async function appendReceivableRow(data: Partial<ReceivableRow>): Promise<void> {
@@ -369,27 +375,16 @@ export function formatHkd(amount: number): string {
 }
 
 /**
- * Read the current running balance from column R (the cash running balance
- * column). Walks up from row 500 to find the last non-empty value.
+ * Build the Running Balance formula for column R at a given row.
+ * Uses a SUM formula so the balance auto-recalculates when rows are
+ * edited or deleted — Andrea's feedback (2026-04-10).
+ *
+ * Formula: =SUM(Q$9:Q{row})
+ * This sums all HKD debit values from the start of data (row 9) down
+ * to the current row, giving a cumulative running balance.
  */
-export async function getCurrentRunningBalance(): Promise<number> {
-  const sheets = getSheets();
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: "Payable!Q9:Q1000",
-    majorDimension: "COLUMNS",
-  });
-  const col = res.data.values?.[0] || [];
-  // Sum all numeric values in column Q (non-reimbursement HKD amounts)
-  let total = 0;
-  for (const cell of col) {
-    if (!cell) continue;
-    const m = String(cell).match(/[\d.,]+/);
-    if (!m) continue;
-    const v = parseFloat(m[0].replace(/,/g, ""));
-    if (isFinite(v)) total += v;
-  }
-  return total;
+export function buildRunningBalanceFormula(row: number): string {
+  return `=SUM(Q$9:Q${row})`;
 }
 
 // ===== Sync & Cache =====

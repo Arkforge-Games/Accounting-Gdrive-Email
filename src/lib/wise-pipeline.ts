@@ -19,7 +19,7 @@
  */
 import * as db from "./db";
 import { getCachedWiseData, WiseTransfer, WiseRecipient } from "./wise";
-import { appendPayableRow, getPayables, convertToHkd, formatHkd, updatePayableCell, getCurrentRunningBalance } from "./sheets";
+import { appendPayableRow, getPayables, convertToHkd, formatHkd, updatePayableCell } from "./sheets";
 import { createBankTransaction, isXeroConnected } from "./xero";
 
 /** Throttle Sheets API calls — 60/min read+write quota per user. */
@@ -161,8 +161,7 @@ export async function runWisePipeline(): Promise<WisePipelineResult> {
     const recipientLookup = buildRecipientLookup();
     const existingPayables = await getPayables();
 
-    // Read running balance once for any new appends
-    let runningBalance = await getCurrentRunningBalance();
+    // Running balance is now a SUM formula in column R (auto-set by appendPayableRow)
 
     for (const t of outgoing) {
       const transferId = String(t.id);
@@ -214,14 +213,11 @@ export async function runWisePipeline(): Promise<WisePipelineResult> {
           // Append new row
           const { sheetType, paymentMethod } = classifyWiseTransfer(recipientName, reference);
 
-          // Cash columns Q & R — non-reimbursement Wise transfers all qualify
+          // Cash column Q — HKD equivalent. Column R is a SUM formula (auto-set).
           let debitCell = "";
-          let runningBalanceCell = "";
           const hkd = convertToHkd(amount, currency);
           if (hkd !== null) {
             debitCell = formatHkd(hkd);
-            runningBalance += hkd;
-            runningBalanceCell = formatHkd(runningBalance);
           }
 
           await appendPayableRow({
@@ -233,15 +229,14 @@ export async function runWisePipeline(): Promise<WisePipelineResult> {
             fullName: "",
             jobDetails: reference || `Wise transfer #${transferId}`,
             paymentAmount: `${currency} ${amount}`,
-            // Column I (Conversion) — Andrea wants HKD conversion shown here too
-            conversion: debitCell,
+            conversion: debitCell, // Column I — HKD conversion
             paymentStatus: "Paid",
             paymentDate: formatTransferDate(t.created),
             paymentMethod,
             account: "HobbyLand",
             receiptCreated: "FALSE",
             debit: debitCell,
-            runningBalance: runningBalanceCell,
+            // Column R auto-set as SUM formula by appendPayableRow
           });
 
           db.logPipeline({
