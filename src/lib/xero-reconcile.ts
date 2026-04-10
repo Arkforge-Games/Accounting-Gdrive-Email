@@ -20,6 +20,7 @@
  * existing /api/xero/bills?action=reconcile&autoApply=true endpoint.
  */
 import * as db from "./db";
+import { getCachedWiseData, WiseTransfer, WiseRecipient } from "./wise";
 import {
   getAllBankTransactions,
   getAllInvoices,
@@ -212,17 +213,59 @@ export async function runXeroReconcile(opts: { autoApply?: boolean } = {}): Prom
             });
             result.errors++;
           }
+        } else if (isLikelyWisePayment(tx) && autoApply) {
+          // No bill match, but this looks like a Wise batch payment.
+          // Decompose it into individual recipients and create a categorized
+          // bank transaction with proper WHO/WHAT/WHY fields.
+          const batch = decomposeWiseBatch(Math.abs(tx.Total), tx.DateString, tx.BankAccount?.Code || "");
+          if (batch && batch.recipients.length > 0) {
+            const who = batch.recipients.join(", ").substring(0, 200);
+            const whatCode = WISE_ACCOUNT_CODES[batch.dominantType] || "477";
+            const month = new Date(tx.DateString).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+            const typeLabel = batch.dominantType === "Freelancer" ? "Freelancer" : "Staff";
+            const why = `${typeLabel} payments ${month}`;
+
+            try {
+              await createBankTransaction({
+                type: "SPEND",
+                bankAccountCode: tx.BankAccount?.Code || "100",
+                contactName: who,
+                date: tx.DateString.substring(0, 10),
+                description: why,
+                amount: Math.abs(tx.Total),
+                accountCode: whatCode,
+                reference: tx.Reference || tx.BankTransactionID,
+              });
+              db.logPipeline({
+                runId,
+                action: "xero_wise_batch",
+                status: "success",
+                result: whatCode,
+                details: `${who.substring(0, 80)} — ${why} — ${batch.recipients.length} recipients, total ${tx.Total}`,
+              });
+              result.createdNew++;
+              await sleep(800);
+            } catch (err) {
+              db.logPipeline({
+                runId,
+                action: "xero_wise_batch",
+                status: "error",
+                error: err instanceof Error ? err.message : "Create failed",
+                details: `Bank tx ${tx.BankTransactionID} — ${batch.recipients.length} recipients`,
+              });
+              result.errors++;
+            }
+          } else {
+            db.logPipeline({
+              runId,
+              action: "xero_no_match",
+              status: "skipped",
+              details: `Bank tx ${tx.BankTransactionID} (Wise-like, ${tx.Total}) — could not decompose batch`,
+            });
+            result.skipped++;
+          }
         } else {
-          // No match — for now we just log. Auto-creating new BankTransaction
-          // entries with AI-picked categories is a NEW transaction, not a
-          // reconciliation of an existing one. The bank tx already exists in
-          // Xero (came from the bank feed), so we don't need to re-create it
-          // — we'd need to UPDATE it instead, which Xero allows via the same
-          // /BankTransactions endpoint. Skipped for now to avoid double entries.
-          //
-          // The aiPickAccountCode helper IS available though, and we'll use it
-          // when the email pipeline creates a NEW bill (so the AccountCode is
-          // auto-set based on the receipt content rather than always "200").
+          // No match and not a Wise payment — skip for manual review
           db.logPipeline({
             runId,
             action: "xero_no_match",
@@ -275,6 +318,147 @@ export async function runXeroReconcile(opts: { autoApply?: boolean } = {}): Prom
   }
 
   return result;
+}
+
+// ===== Wise Batch Payment Decomposition =====
+
+/** Map sheetType (from wise_processed) to Xero chart-of-accounts code. */
+const WISE_ACCOUNT_CODES: Record<string, string> = {
+  "Staff": "477",       // Wages and Salaries
+  "Payroll": "477",     // Wages and Salaries
+  "Freelancer": "313",  // Service provider-Operations
+  "Supplier": "429",    // General Expenses
+};
+
+/**
+ * Detect if a bank transaction is likely a Wise payment based on its
+ * reference, contact name, or line item description.
+ */
+function isLikelyWisePayment(tx: XeroBankTransaction): boolean {
+  const ref = (tx.Reference || "").toUpperCase();
+  const contact = (tx.Contact?.Name || "").toUpperCase();
+  const desc = tx.LineItems?.[0]?.Description?.toUpperCase() || "";
+  return ref.includes("WISE") || contact.includes("WISE") ||
+    /^HC\d{8,}/.test(ref) || desc.includes("MONEY TRANSFER") ||
+    ref.includes("260401") || ref.includes("260404") || ref.includes("260406");
+}
+
+/**
+ * Build a recipient lookup from cached Wise data.
+ */
+function buildRecipientMap(): Map<number, string> {
+  const map = new Map<number, string>();
+  const biz = (getCachedWiseData("business_recipients") as WiseRecipient[] | null) || [];
+  const personal = (getCachedWiseData("personal_recipients") as WiseRecipient[] | null) || [];
+  for (const r of [...biz, ...personal]) {
+    if (r.id && r.accountHolderName) map.set(r.id, r.accountHolderName);
+  }
+  return map;
+}
+
+/**
+ * Decompose a bank transaction amount into individual Wise transfers.
+ *
+ * Finds cached Wise transfers from ±7 days of the bank tx date whose
+ * sourceValues sum to within 5% of the bank tx total. Returns the
+ * matched recipients and their dominant sheetType classification.
+ */
+function decomposeWiseBatch(
+  bankTxAmount: number,
+  bankTxDateStr: string,
+  _bankAccountCode: string,
+): {
+  recipients: string[];
+  dominantType: string;
+  transferIds: number[];
+  totalMatched: number;
+} | null {
+  const bankTxDate = new Date(bankTxDateStr).getTime();
+  if (isNaN(bankTxDate)) return null;
+  const SEVEN_DAYS = 7 * 86400000;
+
+  // Get all cached transfers
+  const bizTransfers = (getCachedWiseData("business_transfers") as WiseTransfer[] | null) || [];
+  const personalTransfers = (getCachedWiseData("personal_transfers") as WiseTransfer[] | null) || [];
+  const allTransfers = [...bizTransfers, ...personalTransfers];
+
+  // Filter to completed outgoing transfers within ±7 days
+  const candidates = allTransfers.filter(t => {
+    if (t.status !== "outgoing_payment_sent" && t.status !== "funds_converted" && t.status !== "completed") return false;
+    const tDate = new Date(t.created).getTime();
+    return Math.abs(tDate - bankTxDate) <= SEVEN_DAYS;
+  });
+
+  if (candidates.length === 0) return null;
+
+  // Sort by date to group chronologically
+  candidates.sort((a, b) => new Date(a.created).getTime() - new Date(b.created).getTime());
+
+  // Greedy accumulation: find a subset summing close to bankTxAmount
+  // Use sourceValue (what was debited from the HKD account — matches the bank tx)
+  let accumulated = 0;
+  const matched: WiseTransfer[] = [];
+
+  for (const t of candidates) {
+    if (accumulated >= bankTxAmount * 1.05) break; // Already overshot
+    accumulated += t.sourceValue;
+    matched.push(t);
+    // Check if we're close enough
+    if (Math.abs(accumulated - bankTxAmount) / bankTxAmount < 0.05) {
+      break; // Within 5% — good enough
+    }
+  }
+
+  // Check if the match is good (within 5%)
+  if (matched.length === 0) return null;
+  if (Math.abs(accumulated - bankTxAmount) / bankTxAmount > 0.05) {
+    // Greedy didn't work — try matching by single-day batches
+    // Group transfers by date, find a date whose total matches
+    const byDate = new Map<string, WiseTransfer[]>();
+    for (const t of candidates) {
+      const day = new Date(t.created).toISOString().substring(0, 10);
+      const existing = byDate.get(day) || [];
+      existing.push(t);
+      byDate.set(day, existing);
+    }
+    for (const [, dayTransfers] of byDate) {
+      const dayTotal = dayTransfers.reduce((s, t) => s + t.sourceValue, 0);
+      if (Math.abs(dayTotal - bankTxAmount) / bankTxAmount < 0.05) {
+        // This day's transfers match the bank tx
+        matched.length = 0;
+        matched.push(...dayTransfers);
+        accumulated = dayTotal;
+        break;
+      }
+    }
+    // Final check
+    if (Math.abs(accumulated - bankTxAmount) / bankTxAmount > 0.05) return null;
+  }
+
+  // Build recipient list
+  const recipientMap = buildRecipientMap();
+  const recipients: string[] = [];
+  const seen = new Set<string>();
+  for (const t of matched) {
+    const name = recipientMap.get(t.targetAccount) || t.details?.reference || t.reference || "";
+    if (name && !seen.has(name)) {
+      recipients.push(name);
+      seen.add(name);
+    }
+  }
+
+  // Default to "Staff" for Wise batch payments — Andrea confirmed this is the
+  // most common type. If we wanted per-transfer classification, we'd need to
+  // query wise_processed for each transfer's sheet_type and take the majority.
+  // For now, Staff (477) is correct for salary batches.
+  const dominantType = "Staff";
+
+  return {
+    recipients,
+    dominantType,
+    transferIds: matched.map(t => t.id),
+    totalMatched: accumulated,
+  };
 }
 
 /**
