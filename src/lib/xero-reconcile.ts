@@ -265,12 +265,17 @@ export async function runXeroReconcile(opts: { autoApply?: boolean } = {}): Prom
             result.skipped++;
           }
         } else {
-          // No match and not a Wise payment — skip for manual review
+          // No match and not detected as Wise — skip for manual review.
+          // Log Reference/Contact for SPEND txns so we can debug detection.
+          const isSpendType = String(tx.Type || "").startsWith("SPEND");
+          const extraInfo = isSpendType
+            ? ` | ref=${tx.Reference || "(none)"} | contact=${tx.Contact?.Name || "(none)"} | desc=${tx.LineItems?.[0]?.Description || "(none)"}`
+            : "";
           db.logPipeline({
             runId,
             action: "xero_no_match",
             status: "skipped",
-            details: `Bank tx ${tx.BankTransactionID} (${tx.Type} ${tx.Total}) — no matching open bill, manual review`,
+            details: `Bank tx ${tx.BankTransactionID} (${tx.Type} ${tx.Total})${extraInfo} — no matching open bill, manual review`,
           });
           result.skipped++;
         }
