@@ -43,10 +43,12 @@ const PAYROLL_REGEX = /\b(salary|payroll|wage|sss|philhealth|pag-?ibig)\b/i;
 
 /**
  * Decide the sheetType for a Wise transfer based on its recipient name and reference.
- * Returns one of the existing dropdown values: Payroll, Freelancer, Supplier.
+ *
+ * Andrea's feedback (2026-04-10): default should be "Staff" not "Supplier",
+ * since most Wise payments are to staff/employees.
  */
 function classifyWiseTransfer(recipientName: string, reference: string): {
-  sheetType: "Payroll" | "Freelancer" | "Supplier";
+  sheetType: "Payroll" | "Freelancer" | "Supplier" | "Staff";
   paymentMethod: "Wise";
   reason: string;
 } {
@@ -59,7 +61,8 @@ function classifyWiseTransfer(recipientName: string, reference: string): {
   if (FREELANCER_REGEX.test(name) || FREELANCER_REGEX.test(ref)) {
     return { sheetType: "Freelancer", paymentMethod: "Wise", reason: "matched freelancer name" };
   }
-  return { sheetType: "Supplier", paymentMethod: "Wise", reason: "default for Wise" };
+  // Andrea prefers "Staff" as the default for Wise transfers (most are staff payments)
+  return { sheetType: "Staff", paymentMethod: "Wise", reason: "default for Wise" };
 }
 
 /** Format a Wise transfer's date for the sheet (e.g. "5 Dec 2025"). */
@@ -221,6 +224,8 @@ export async function runWisePipeline(): Promise<WisePipelineResult> {
             fullName: "",
             jobDetails: reference || `Wise transfer #${transferId}`,
             paymentAmount: `${currency} ${amount}`,
+            // Column I (Conversion) — Andrea wants HKD conversion shown here too
+            conversion: debitCell,
             paymentStatus: "Paid",
             paymentDate: formatTransferDate(t.created),
             paymentMethod,

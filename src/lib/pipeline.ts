@@ -234,6 +234,7 @@ export async function runPipeline(): Promise<PipelineResult> {
                 : "",
               jobDetails: file.notes || "",
               paymentAmount: file.amount ? `${file.currency} ${file.amount}` : "",
+              conversion: debitCell, // Column I — Andrea wants HKD conversion here too
               paymentStatus: "Pending",
               paymentMethod,
               account: "HobbyLand",

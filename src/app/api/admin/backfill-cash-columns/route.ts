@@ -88,7 +88,11 @@ export async function POST() {
     for (let i = 0; i < writes.length; i += BATCH_SIZE) {
       const batch = writes.slice(i, i + BATCH_SIZE);
       const data = batch.flatMap(w => [
+        // Column I (Conversion) — Andrea wants HKD shown here too
+        { range: `Payable!I${w.row}`, values: [[w.q]] },
+        // Column Q (Debit / Money Out)
         { range: `Payable!Q${w.row}`, values: [[w.q]] },
+        // Column R (Running Balance)
         { range: `Payable!R${w.row}`, values: [[w.r]] },
       ]);
       await sheets.spreadsheets.values.batchUpdate({
