@@ -10,8 +10,10 @@
 import * as db from "./db";
 import { categorizeFile, extractAmountFromBody } from "./categorize";
 import { isAIConfigured, aiCategorizeFile } from "./ai-categorize";
-import { appendPayableRow, appendReceivableRow, getPayables, getReceivables, convertToHkd, formatHkd } from "./sheets";
+import { appendPayableRow, appendReceivableRow, getPayables, getReceivables, convertToHkd, formatHkd, updatePayableCell } from "./sheets";
 import { uploadToDrive, getDriveFolderForSheetType, buildDriveFilename, resolveOrCreateFolder, getFiscalYearFolderName, resolveAppFolderName } from "./drive-upload";
+import { createBankTransaction, isXeroConnected } from "./xero";
+import { pickAccountCodeForReceipt } from "./xero-reconcile";
 
 /** Sleep helper to throttle Google Sheets writes (max 60/min) */
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -93,7 +95,7 @@ export async function runPipeline(): Promise<PipelineResult> {
     }
 
     // Load existing sheet data for duplicate checking
-    let existingPayables: { supplierName: string; invoiceNumber: string; paymentAmount: string; jobDate: string }[] = [];
+    let existingPayables: { supplierName: string; invoiceNumber: string; paymentAmount: string; jobDate: string; receiptLink: string; rowIndex: number }[] = [];
     let existingReceivables: { invoiceNumber: string; clientName: string; paymentAmount: string }[] = [];
     try {
       existingPayables = await getPayables();
@@ -171,6 +173,25 @@ export async function runPipeline(): Promise<PipelineResult> {
 
         const receiptLink = getReceiptLink(file);
 
+        // SALES TEAM MATCHING — check if there's already a row in the sheet
+        // (pre-entered by the sales team) that matches this receipt. If so,
+        // update that row with the receipt link instead of creating a new one.
+        // Andrea's April 2026 checklist: "sales team lists expenses first,
+        // receipts come second — need to match."
+        const unfilledMatch = findUnfilledRow(existingPayables, file);
+        if (unfilledMatch !== null) {
+          const finalReceiptLink = await uploadReceiptToDrive(file, file.sheetType || formatType(file.category), file.category) || receiptLink;
+          await updatePayableCell(unfilledMatch, "C", finalReceiptLink); // Receipt Link
+          await updatePayableCell(unfilledMatch, "P", "TRUE"); // Receipt created
+          if (file.referenceNo) await updatePayableCell(unfilledMatch, "E", file.referenceNo); // Invoice Number
+          if (file.notes) await updatePayableCell(unfilledMatch, "G", file.notes); // Job Details
+          db.logPipeline({ runId, fileId: file.id, action: "record", status: "success", result: "matched_sales_row", details: `${file.vendor} ${file.currency} ${file.amount} → existing row ${unfilledMatch}` });
+          writtenInRun.add(runKey);
+          result.recorded++;
+          await sleep(1200);
+          continue;
+        }
+
         try {
           if (PAYABLE_CATEGORIES.has(file.category)) {
             // Determine sheetType. Order of precedence:
@@ -231,11 +252,35 @@ export async function runPipeline(): Promise<PipelineResult> {
             db.logPipeline({ runId, fileId: file.id, action: "record", status: "success", result: "payable", details: `${file.vendor} ${file.currency} ${file.amount}` });
             writtenInRun.add(runKey);
             result.recorded++;
-            await sleep(1200); // Throttle: max ~50 writes/min to stay under Google Sheets 60/min limit
+            await sleep(1200);
 
-            // Xero bill creation DISABLED per Andrea (2026-04-07): "We don't need to
-            // create any bills or invoices, only reconciliation for now."
-            // Pipeline records to Google Sheets only; Xero is read-only for now.
+            // Create a Xero SPEND BankTransaction so it auto-matches when the
+            // bank feed imports the corresponding debit. Andrea's checklist:
+            // "Auto match the expenses/payable to reconcile data."
+            // Skip reimbursements (those don't appear as separate bank debits).
+            if (isXeroConnected() && file.category !== "reimbursement" && file.amount) {
+              try {
+                const xeroCode = await pickAccountCodeForReceipt(
+                  file.vendor || "",
+                  file.notes || "",
+                  parseFloat(file.amount),
+                ) || "429"; // Default to General Expenses
+                await createBankTransaction({
+                  type: "SPEND",
+                  bankAccountCode: "100",
+                  contactName: file.vendor || "Unknown",
+                  date: file.date?.substring(0, 10) || new Date().toISOString().substring(0, 10),
+                  description: file.notes || `${file.category}: ${file.name}`,
+                  amount: parseFloat(file.amount),
+                  accountCode: xeroCode,
+                  currencyCode: file.currency || "HKD",
+                  reference: file.referenceNo || file.id,
+                });
+                db.logPipeline({ runId, fileId: file.id, action: "xero_bank_tx", status: "success", result: xeroCode, details: `${file.vendor} ${file.currency} ${file.amount}` });
+              } catch (err) {
+                db.logPipeline({ runId, fileId: file.id, action: "xero_bank_tx", status: "error", error: err instanceof Error ? err.message : "Xero failed" });
+              }
+            }
           } else if (RECEIVABLE_CATEGORIES.has(file.category)) {
             const finalReceiptLink = await uploadReceiptToDrive(file, "Invoice", file.category) || receiptLink;
             await appendReceivableRow({
@@ -355,6 +400,43 @@ function isDuplicate(
   }
 
   return false;
+}
+
+/**
+ * Find a pre-existing sheet row (entered by the sales team) that matches
+ * this file but has no receipt attached yet. Used for "sales team lists
+ * expenses first, receipts come later" matching — Andrea's April 2026
+ * checklist.
+ *
+ * Match criteria:
+ *   - Same vendor (5-char prefix)
+ *   - Similar amount (within 5%)
+ *   - Empty receiptLink (no receipt attached yet)
+ *   - Row entered within 30 days of the file date
+ */
+function findUnfilledRow(
+  payables: { supplierName: string; paymentAmount: string; receiptLink: string; jobDate: string; rowIndex: number }[],
+  file: db.IndexedFile,
+): number | null {
+  const vendor = (file.vendor || "").toLowerCase();
+  const amount = file.amount ? parseFloat(file.amount) : 0;
+  const fileDate = new Date(file.date).getTime();
+  if (!vendor || amount <= 0 || isNaN(fileDate)) return null;
+
+  for (const p of payables) {
+    // Must have empty receipt link (not yet matched to a receipt)
+    if (p.receiptLink && p.receiptLink.trim() !== "") continue;
+    // Vendor prefix match
+    if (!p.supplierName?.toLowerCase().includes(vendor.substring(0, 5))) continue;
+    // Amount within 5%
+    const pAmount = parseFloat((p.paymentAmount || "0").replace(/[^0-9.]/g, "")) || 0;
+    if (pAmount <= 0 || Math.abs(amount - pAmount) / pAmount > 0.05) continue;
+    // Date within 30 days
+    const pDate = new Date(p.jobDate).getTime();
+    if (isNaN(pDate) || Math.abs(fileDate - pDate) > 30 * 86400000) continue;
+    return p.rowIndex;
+  }
+  return null;
 }
 
 function getReceiptLink(file: db.IndexedFile): string {

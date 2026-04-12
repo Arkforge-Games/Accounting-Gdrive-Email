@@ -21,6 +21,8 @@ import * as db from "./db";
 import { getCachedWiseData, WiseTransfer, WiseRecipient } from "./wise";
 import { appendPayableRow, getPayables, convertToHkd, formatHkd, updatePayableCell } from "./sheets";
 import { createBankTransaction, isXeroConnected } from "./xero";
+import { getOrCreateReceiptSheet, addReceiptEntry, formatReceiptDate } from "./receipt-generator";
+import { getFiscalYearFolderName } from "./drive-upload";
 
 /** Throttle Sheets API calls — 60/min read+write quota per user. */
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -251,6 +253,28 @@ export async function runWisePipeline(): Promise<WisePipelineResult> {
             transferDate: t.created, sheetType, action: "appended",
           });
           result.appended++;
+
+          // Generate compiled "Receipt of Services" sheet for Staff/Freelancer
+          if (sheetType === "Staff" || sheetType === "Freelancer") {
+            try {
+              const fiscalYear = getFiscalYearFolderName(t.created);
+              const isFreelancer = sheetType === "Freelancer";
+              const { sheetId } = await getOrCreateReceiptSheet(recipientName, fiscalYear, isFreelancer);
+              const hkdVal = hkd !== null ? hkd : 0;
+              const remark = `${sheetType === "Staff" ? "Salary" : "Freelancer payment"} - Bank Transfer`;
+              await addReceiptEntry(sheetId, {
+                date: formatReceiptDate(t.created),
+                remark,
+                localAmount: amount,
+                localCurrency: currency,
+                hkdAmount: hkdVal,
+              });
+              db.logPipeline({ runId, action: "receipt_entry_added", status: "success", details: `${recipientName} ${currency} ${amount} → Receipt FY ${fiscalYear}` });
+            } catch (err) {
+              db.logPipeline({ runId, action: "receipt_entry_added", status: "error", error: err instanceof Error ? err.message : "Receipt generation failed", details: recipientName });
+            }
+          }
+
           // Throttle: appendPayableRow makes 2 sheets calls (read+write).
           // Sheets API limit is 60/min — sleep to stay safely under.
           await sleep(2500);

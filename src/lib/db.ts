@@ -156,6 +156,19 @@ function initSchema(db: Database.Database) {
       updated_at TEXT DEFAULT (datetime('now'))
     );
 
+    -- receipt_sheets: tracks compiled "Receipt of Services" sheets per person per FY.
+    -- Andrea's April 2026 checklist: Staff/Freelancer compiled receipts.
+    CREATE TABLE IF NOT EXISTS receipt_sheets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      recipient_name TEXT NOT NULL,
+      fiscal_year TEXT NOT NULL,
+      sheet_id TEXT NOT NULL,
+      sheet_url TEXT,
+      drive_folder_id TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(recipient_name, fiscal_year)
+    );
+
     -- wise_processed: tracks Wise transfers that have been processed by the
     -- wise-pipeline so we never reprocess them. Each row represents one
     -- transfer that was either matched against an existing sheet row (status
@@ -1013,6 +1026,21 @@ export function getUnrecordedFiles(): IndexedFile[] {
 
   const all = getIndexedFiles({});
   return all.filter(f => !recordedIds.has(f.id));
+}
+
+// ===== Receipt Sheets =====
+
+export function getReceiptSheet(recipientName: string, fiscalYear: string): { sheetId: string; sheetUrl: string | null; driveFolderId: string | null } | undefined {
+  return getDb().prepare(
+    "SELECT sheet_id AS sheetId, sheet_url AS sheetUrl, drive_folder_id AS driveFolderId FROM receipt_sheets WHERE recipient_name = ? AND fiscal_year = ?"
+  ).get(recipientName, fiscalYear) as { sheetId: string; sheetUrl: string | null; driveFolderId: string | null } | undefined;
+}
+
+export function saveReceiptSheet(entry: { recipientName: string; fiscalYear: string; sheetId: string; sheetUrl?: string; driveFolderId?: string }) {
+  getDb().prepare(`
+    INSERT OR REPLACE INTO receipt_sheets (recipient_name, fiscal_year, sheet_id, sheet_url, drive_folder_id)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(entry.recipientName, entry.fiscalYear, entry.sheetId, entry.sheetUrl || null, entry.driveFolderId || null);
 }
 
 // ===== Wise pipeline =====
