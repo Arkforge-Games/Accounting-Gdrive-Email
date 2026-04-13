@@ -181,6 +181,18 @@ export async function getRecipients(profileId: number): Promise<WiseRecipient[]>
   return wiseGet(`/v1/accounts?profileId=${profileId}`);
 }
 
+/**
+ * Fetch a single recipient by account ID. Used to look up names for
+ * recipients not in the cached list (deleted/inactive accounts).
+ */
+export async function getRecipientById(accountId: number): Promise<WiseRecipient | null> {
+  try {
+    return await wiseGet(`/v1/accounts/${accountId}`);
+  } catch {
+    return null;
+  }
+}
+
 export async function getStatement(
   profileId: number,
   balanceId: number,
@@ -313,6 +325,34 @@ export async function syncWiseData(): Promise<{
     totalTransfers += transfers.length;
     totalRecipients += recipients.length;
     totalBalances += balances.length;
+  }
+
+  // Fetch names for recipients missing from the main list.
+  // Some transfers reference recipient IDs that aren't in /v1/accounts
+  // (deleted accounts, cross-profile transfers, etc.)
+  if (business) {
+    const bizTransfers = (getWiseCache("business_transfers")?.data as WiseTransfer[] | null) || [];
+    const bizRecipients = (getWiseCache("business_recipients")?.data as WiseRecipient[] | null) || [];
+    const knownIds = new Set(bizRecipients.map(r => r.id));
+    const missingIds = new Set<number>();
+    for (const t of bizTransfers) {
+      if (t.targetAccount && !knownIds.has(t.targetAccount)) missingIds.add(t.targetAccount);
+    }
+    if (missingIds.size > 0) {
+      const fetched: WiseRecipient[] = [];
+      for (const id of missingIds) {
+        try {
+          const r = await getRecipientById(id);
+          if (r && r.accountHolderName) fetched.push(r);
+        } catch { /* skip failures */ }
+      }
+      if (fetched.length > 0) {
+        // Merge into cached recipients
+        const merged = [...bizRecipients, ...fetched];
+        setWiseCache("business_recipients", merged);
+        totalRecipients += fetched.length;
+      }
+    }
   }
 
   // Get common exchange rates. Cache both directions and X→HKD for every
