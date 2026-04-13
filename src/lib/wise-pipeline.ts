@@ -20,7 +20,7 @@
 import * as db from "./db";
 import { getCachedWiseData, WiseTransfer, WiseRecipient } from "./wise";
 import { appendPayableRow, getPayables, convertToHkd, formatHkd, updatePayableCell } from "./sheets";
-import { createBankTransaction, isXeroConnected } from "./xero";
+import { createBill, isXeroConnected } from "./xero";
 import { getOrCreateReceiptSheet, addReceiptEntry, formatReceiptDate } from "./receipt-generator";
 import { getFiscalYearFolderName } from "./drive-upload";
 
@@ -358,16 +358,14 @@ export async function runWisePipeline(): Promise<WisePipelineResult> {
           }));
 
           try {
-            await createBankTransaction({
-              type: "SPEND",
-              bankAccountCode: "100",
+            await createBill({
               contactName: "WISE PAYMENT",
               date: day,
               description: why,
               amount: totalSource,
               accountCode,
               currencyCode: currency,
-              reference: `Wise batch ${day}`,
+              invoiceNumber: `Wise batch ${day}`,
               lineItems, // One line per recipient with their individual salary
             });
             db.logPipeline({

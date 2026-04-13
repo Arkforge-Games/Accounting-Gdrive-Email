@@ -11,7 +11,7 @@
 import { NextResponse } from "next/server";
 import * as db from "@/lib/db";
 import { getCachedWiseData, WiseTransfer, WiseRecipient } from "@/lib/wise";
-import { createBankTransaction, isXeroConnected } from "@/lib/xero";
+import { createBill, isXeroConnected } from "@/lib/xero";
 
 const XERO_ACCOUNT_CODES: Record<string, string> = {
   "Staff": "477",
@@ -73,16 +73,14 @@ export async function POST() {
       const why = `Staff payments ${month} (${transfers.length} transfers via Wise)`;
 
       try {
-        await createBankTransaction({
-          type: "SPEND",
-          bankAccountCode: "100",
+        await createBill({
           contactName: "WISE PAYMENT",
           date: day,
           description: why,
           amount: totalSource,
           accountCode: "477",
           currencyCode: currency,
-          reference: `Wise batch ${day}`,
+          invoiceNumber: `Wise batch ${day}`,
           lineItems, // One line per recipient with individual salary
         });
         results.push({ date: day, count: transfers.length, total: totalSource, currency, who, status: "created" });

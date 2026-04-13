@@ -12,7 +12,7 @@ import { categorizeFile, extractAmountFromBody } from "./categorize";
 import { isAIConfigured, aiCategorizeFile } from "./ai-categorize";
 import { appendPayableRow, appendReceivableRow, getPayables, getReceivables, convertToHkd, formatHkd, updatePayableCell } from "./sheets";
 import { uploadToDrive, getDriveFolderForSheetType, buildDriveFilename, resolveOrCreateFolder, getFiscalYearFolderName, resolveAppFolderName } from "./drive-upload";
-import { createBankTransaction, isXeroConnected } from "./xero";
+import { createBill, isXeroConnected } from "./xero";
 import { pickAccountCodeForReceipt } from "./xero-reconcile";
 
 /** Sleep helper to throttle Google Sheets writes (max 60/min) */
@@ -254,10 +254,11 @@ export async function runPipeline(): Promise<PipelineResult> {
             result.recorded++;
             await sleep(1200);
 
-            // Create a Xero SPEND BankTransaction so it auto-matches when the
-            // bank feed imports the corresponding debit. Andrea's checklist:
+            // Create a Xero DRAFT bill so it shows up on the "Match" tab when
+            // Andrea reconciles the bank feed. Andrea's checklist:
             // "Auto match the expenses/payable to reconcile data."
-            // Skip reimbursements (those don't appear as separate bank debits).
+            // Replicable to both Wise and non-Wise expenses.
+            // Skip reimbursements (those are personal, not company expenses).
             if (isXeroConnected() && file.category !== "reimbursement" && file.amount) {
               try {
                 const xeroCode = await pickAccountCodeForReceipt(
@@ -265,20 +266,18 @@ export async function runPipeline(): Promise<PipelineResult> {
                   file.notes || "",
                   parseFloat(file.amount),
                 ) || "429"; // Default to General Expenses
-                await createBankTransaction({
-                  type: "SPEND",
-                  bankAccountCode: "100",
+                await createBill({
                   contactName: file.vendor || "Unknown",
                   date: file.date?.substring(0, 10) || new Date().toISOString().substring(0, 10),
                   description: file.notes || `${file.category}: ${file.name}`,
                   amount: parseFloat(file.amount),
                   accountCode: xeroCode,
                   currencyCode: file.currency || "HKD",
-                  reference: file.referenceNo || file.id,
+                  invoiceNumber: file.referenceNo || undefined,
                 });
-                db.logPipeline({ runId, fileId: file.id, action: "xero_bank_tx", status: "success", result: xeroCode, details: `${file.vendor} ${file.currency} ${file.amount}` });
+                db.logPipeline({ runId, fileId: file.id, action: "xero_bill", status: "success", result: xeroCode, details: `${file.vendor} ${file.currency} ${file.amount}` });
               } catch (err) {
-                db.logPipeline({ runId, fileId: file.id, action: "xero_bank_tx", status: "error", error: err instanceof Error ? err.message : "Xero failed" });
+                db.logPipeline({ runId, fileId: file.id, action: "xero_bill", status: "error", error: err instanceof Error ? err.message : "Xero failed" });
               }
             }
           } else if (RECEIVABLE_CATEGORIES.has(file.category)) {

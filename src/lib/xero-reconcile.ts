@@ -26,7 +26,7 @@ import {
   getAllInvoices,
   getAccounts,
   applyPaymentToBill,
-  createBankTransaction,
+  createBill,
   XeroBankTransaction,
   XeroInvoice,
   XeroAccount,
@@ -233,15 +233,13 @@ export async function runXeroReconcile(opts: { autoApply?: boolean } = {}): Prom
                 accountCode: whatCode,
               }));
 
-              await createBankTransaction({
-                type: "SPEND",
-                bankAccountCode: tx.BankAccount?.Code || "100",
+              await createBill({
                 contactName: "WISE PAYMENT",
                 date: tx.DateString.substring(0, 10),
                 description: why,
                 amount: Math.abs(tx.Total),
                 accountCode: whatCode,
-                reference: tx.Reference || tx.BankTransactionID,
+                invoiceNumber: tx.Reference || tx.BankTransactionID,
                 lineItems,
               });
               db.logPipeline({

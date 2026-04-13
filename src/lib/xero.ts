@@ -232,20 +232,29 @@ export async function createBill(bill: {
   currencyCode?: string;
   invoiceNumber?: string;
   accountCode?: string;
+  /** Optional: multiple line items (one per recipient for Wise batch). */
+  lineItems?: Array<{ description: string; amount: number; accountCode?: string }>;
 }): Promise<unknown> {
+  const items = bill.lineItems && bill.lineItems.length > 0
+    ? bill.lineItems.map(li => ({
+        Description: li.description,
+        Quantity: 1,
+        UnitAmount: li.amount,
+        AccountCode: li.accountCode || bill.accountCode || "200",
+      }))
+    : [{
+        Description: bill.description,
+        Quantity: 1,
+        UnitAmount: bill.amount,
+        AccountCode: bill.accountCode || "200",
+      }];
+
   return xeroPost("/Invoices", {
     Type: "ACCPAY",
     Contact: { Name: bill.contactName },
     Date: bill.date,
     DueDate: bill.dueDate || bill.date,
-    LineItems: [
-      {
-        Description: bill.description,
-        Quantity: 1,
-        UnitAmount: bill.amount,
-        AccountCode: bill.accountCode || "200",
-      },
-    ],
+    LineItems: items,
     Status: "DRAFT",
     InvoiceNumber: bill.invoiceNumber || undefined,
     CurrencyCode: bill.currencyCode || "HKD",
