@@ -322,9 +322,13 @@ export async function applyPaymentToBill(payment: {
  * "What" the user picks from Xero's chart-of-accounts dropdown — we pick it
  * via AI based on the bank narration.
  */
+// Default HSBC bank account ID in Xero (the only bank account Andrea has).
+// Used when creating SPEND/RECEIVE bank transactions.
+const XERO_BANK_ACCOUNT_ID = "fccb6880-9a8e-475a-9624-e25b17141a34";
+
 export async function createBankTransaction(tx: {
   type: "RECEIVE" | "SPEND";
-  bankAccountCode: string;
+  bankAccountCode: string;      // legacy field, kept for compatibility but overridden by AccountID
   contactName: string;
   date: string;
   description: string;
@@ -332,11 +336,8 @@ export async function createBankTransaction(tx: {
   accountCode: string;
   currencyCode?: string;
   reference?: string;
-  /** Optional: multiple line items (one per recipient for Wise batch payments).
-   *  If provided, these replace the single description+amount line item. */
   lineItems?: Array<{ description: string; amount: number; accountCode?: string }>;
 }): Promise<unknown> {
-  // Build line items — either explicit per-recipient items or a single item
   const items = tx.lineItems && tx.lineItems.length > 0
     ? tx.lineItems.map(li => ({
         Description: li.description,
@@ -356,7 +357,8 @@ export async function createBankTransaction(tx: {
       {
         Type: tx.type,
         Contact: { Name: tx.contactName },
-        BankAccount: { Code: tx.bankAccountCode },
+        // Use AccountID (not Code) because Andrea's HSBC bank account has no code
+        BankAccount: { AccountID: XERO_BANK_ACCOUNT_ID },
         Date: tx.date,
         Reference: tx.reference || "",
         LineItems: items,
