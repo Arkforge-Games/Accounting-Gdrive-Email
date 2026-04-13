@@ -216,11 +216,19 @@ async function xeroPost<T>(endpoint: string, body: unknown): Promise<T> {
     },
     body: JSON.stringify(body),
   });
+  // Read as text first, then try to parse as JSON.
+  // Xero sometimes returns HTML error pages which crash res.json().
+  const text = await res.text();
   if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Xero API error: ${res.status} ${err}`);
+    throw new Error(`Xero API error: ${res.status} ${text.substring(0, 500)}`);
   }
-  return res.json();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    // Response was 200 but body is not JSON — log and throw
+    console.error(`[Xero POST ${endpoint}] status ${res.status} but non-JSON body:`, text.substring(0, 300));
+    throw new Error(`Xero returned non-JSON response (${res.status}): ${text.substring(0, 200)}`);
+  }
 }
 
 export async function createBill(bill: {
