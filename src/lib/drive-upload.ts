@@ -186,9 +186,14 @@ export function resolveAppFolderName(opts: {
   description: string | null | undefined;
   vendor: string | null | undefined;
 }): string {
-  // Use vendor name directly (e.g. "Cloudflare, Inc." → "Cloudflare, Inc.")
+  // Use vendor name, cleaned up for folder naming.
+  // Strip legal suffixes like ", Inc.", ", LLC", " Ltd" etc. for cleaner folders.
+  // Andrea: "we just need the app" — e.g. "Cloudflare" not "Cloudflare, Inc."
   if (opts.vendor) {
-    return opts.vendor.replace(/[/\\:*?"<>|]/g, "_").trim();
+    return opts.vendor
+      .replace(/,?\s*(Inc\.?|LLC|Ltd\.?|Limited|Corp\.?|Co\.?|Pte\.?|Pty\.?)$/i, "")
+      .replace(/[/\\:*?"<>|]/g, "_")
+      .trim() || opts.vendor.trim();
   }
   return "(uncategorized)";
 }
