@@ -323,16 +323,34 @@ export async function applyPaymentToBill(payment: {
  * via AI based on the bank narration.
  */
 export async function createBankTransaction(tx: {
-  type: "RECEIVE" | "SPEND";    // RECEIVE = money in, SPEND = money out
-  bankAccountCode: string;       // Which bank account this transaction belongs to (the "from" account)
-  contactName: string;           // Who
-  date: string;                  // YYYY-MM-DD
-  description: string;           // Why
-  amount: number;                // Total amount
-  accountCode: string;           // What — the chart-of-accounts code for the categorization
+  type: "RECEIVE" | "SPEND";
+  bankAccountCode: string;
+  contactName: string;
+  date: string;
+  description: string;
+  amount: number;
+  accountCode: string;
   currencyCode?: string;
   reference?: string;
+  /** Optional: multiple line items (one per recipient for Wise batch payments).
+   *  If provided, these replace the single description+amount line item. */
+  lineItems?: Array<{ description: string; amount: number; accountCode?: string }>;
 }): Promise<unknown> {
+  // Build line items — either explicit per-recipient items or a single item
+  const items = tx.lineItems && tx.lineItems.length > 0
+    ? tx.lineItems.map(li => ({
+        Description: li.description,
+        Quantity: 1,
+        UnitAmount: li.amount,
+        AccountCode: li.accountCode || tx.accountCode,
+      }))
+    : [{
+        Description: tx.description,
+        Quantity: 1,
+        UnitAmount: tx.amount,
+        AccountCode: tx.accountCode,
+      }];
+
   return xeroPost("/BankTransactions", {
     BankTransactions: [
       {
@@ -341,14 +359,7 @@ export async function createBankTransaction(tx: {
         BankAccount: { Code: tx.bankAccountCode },
         Date: tx.date,
         Reference: tx.reference || "",
-        LineItems: [
-          {
-            Description: tx.description,
-            Quantity: 1,
-            UnitAmount: tx.amount,
-            AccountCode: tx.accountCode,
-          },
-        ],
+        LineItems: items,
         CurrencyCode: tx.currencyCode || "HKD",
         Status: "AUTHORISED",
       },

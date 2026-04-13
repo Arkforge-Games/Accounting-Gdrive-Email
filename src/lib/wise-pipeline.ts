@@ -336,10 +336,6 @@ export async function runWisePipeline(): Promise<WisePipelineResult> {
           const totalSource = transfers.reduce((s, t) => s + t.sourceValue, 0);
           const currency = transfers[0].sourceCurrency || "HKD";
 
-          // WHO = all unique recipients
-          const recipientNames = [...new Set(transfers.map(t => t.recipientName).filter(Boolean))];
-          const who = recipientNames.join(", ").substring(0, 200) || "Wise batch payment";
-
           // WHAT = dominant type's account code
           const typeCounts: Record<string, number> = {};
           for (const t of transfers) {
@@ -353,24 +349,33 @@ export async function runWisePipeline(): Promise<WisePipelineResult> {
           const typeLabel = dominantType === "Freelancer" ? "Freelancer" : "Staff";
           const why = `${typeLabel} payments ${month} (${transfers.length} transfers via Wise)`;
 
+          // Build INDIVIDUAL line items per recipient with their actual salary.
+          // Andrea's checklist: "Put salary value of each staff on Wise reconcile"
+          const lineItems = transfers.map(t => ({
+            description: t.recipientName || "Unknown",
+            amount: t.sourceValue, // HKD amount debited for this person
+            accountCode,
+          }));
+
           try {
             await createBankTransaction({
               type: "SPEND",
-              bankAccountCode: "100", // Default bank account
-              contactName: who,
+              bankAccountCode: "100",
+              contactName: "WISE PAYMENT",
               date: day,
               description: why,
               amount: totalSource,
               accountCode,
               currencyCode: currency,
               reference: `Wise batch ${day}`,
+              lineItems, // One line per recipient with their individual salary
             });
             db.logPipeline({
               runId,
               action: "xero_wise_batch_created",
               status: "success",
               result: accountCode,
-              details: `${who.substring(0, 60)} — ${why} — ${currency} ${totalSource}`,
+              details: `${lineItems.map(li => li.description).join(", ").substring(0, 60)} — ${why} — ${currency} ${totalSource}`,
             });
           } catch (err) {
             db.logPipeline({

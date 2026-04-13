@@ -226,15 +226,23 @@ export async function runXeroReconcile(opts: { autoApply?: boolean } = {}): Prom
             const why = `${typeLabel} payments ${month}`;
 
             try {
+              // Build per-recipient line items with individual amounts
+              const lineItems = batch.recipients.map((name, i) => ({
+                description: name,
+                amount: batch.transferIds[i] ? Math.abs(tx.Total) / batch.recipients.length : 0,
+                accountCode: whatCode,
+              }));
+
               await createBankTransaction({
                 type: "SPEND",
                 bankAccountCode: tx.BankAccount?.Code || "100",
-                contactName: who,
+                contactName: "WISE PAYMENT",
                 date: tx.DateString.substring(0, 10),
                 description: why,
                 amount: Math.abs(tx.Total),
                 accountCode: whatCode,
                 reference: tx.Reference || tx.BankTransactionID,
+                lineItems,
               });
               db.logPipeline({
                 runId,

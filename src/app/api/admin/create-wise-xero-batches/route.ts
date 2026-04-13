@@ -60,9 +60,13 @@ export async function POST() {
       const totalSource = transfers.reduce((s, t) => s + t.sourceValue, 0);
       const currency = transfers[0].sourceCurrency || "HKD";
 
-      // Build WHO
-      const recipientNames = [...new Set(transfers.map(t => recipientMap.get(t.targetAccount) || t.reference || "").filter(Boolean))];
-      const who = recipientNames.join(", ").substring(0, 200) || "Wise batch payment";
+      // Build per-recipient line items with individual salary amounts
+      const lineItems = transfers.map(t => ({
+        description: recipientMap.get(t.targetAccount) || t.reference || "Unknown",
+        amount: t.sourceValue, // HKD amount for this person
+      }));
+      const recipientNames = lineItems.map(li => li.description);
+      const who = recipientNames.join(", ").substring(0, 60);
 
       // WHY
       const month = new Date(day).toLocaleDateString("en-US", { month: "long", year: "numeric" });
@@ -72,15 +76,16 @@ export async function POST() {
         await createBankTransaction({
           type: "SPEND",
           bankAccountCode: "100",
-          contactName: who,
+          contactName: "WISE PAYMENT",
           date: day,
           description: why,
           amount: totalSource,
           accountCode: "477",
           currencyCode: currency,
           reference: `Wise batch ${day}`,
+          lineItems, // One line per recipient with individual salary
         });
-        results.push({ date: day, count: transfers.length, total: totalSource, currency, who: who.substring(0, 60), status: "created" });
+        results.push({ date: day, count: transfers.length, total: totalSource, currency, who, status: "created" });
       } catch (err) {
         results.push({ date: day, count: transfers.length, total: totalSource, currency, who: who.substring(0, 60), status: "error", error: err instanceof Error ? err.message : "failed" });
       }
