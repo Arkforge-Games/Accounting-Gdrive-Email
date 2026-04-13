@@ -322,9 +322,9 @@ export async function applyPaymentToBill(payment: {
  * "What" the user picks from Xero's chart-of-accounts dropdown — we pick it
  * via AI based on the bank narration.
  */
-// Default HSBC bank account ID in Xero (the only bank account Andrea has).
-// Used when creating SPEND/RECEIVE bank transactions.
-const XERO_BANK_ACCOUNT_ID = "fccb6880-9a8e-475a-9624-e25b17141a34";
+// Andrea's Xero bank accounts. Used when creating SPEND/RECEIVE bank transactions.
+// The HSBC account has no Code field, so we identify it by Name.
+const XERO_BANK_ACCOUNT_NAME = "HSBC";
 
 export async function createBankTransaction(tx: {
   type: "RECEIVE" | "SPEND";
@@ -357,8 +357,8 @@ export async function createBankTransaction(tx: {
       {
         Type: tx.type,
         Contact: { Name: tx.contactName },
-        // Use AccountID (not Code) because Andrea's HSBC bank account has no code
-        BankAccount: { AccountID: XERO_BANK_ACCOUNT_ID },
+        // Use Name because Andrea's HSBC bank account has no Code field
+        BankAccount: { Name: XERO_BANK_ACCOUNT_NAME },
         Date: tx.date,
         Reference: tx.reference || "",
         LineItems: items,
