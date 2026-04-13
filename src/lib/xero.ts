@@ -213,6 +213,7 @@ async function xeroPost<T>(endpoint: string, body: unknown): Promise<T> {
       Authorization: `Bearer ${accessToken}`,
       "xero-tenant-id": tenantId,
       "Content-Type": "application/json",
+      "Accept": "application/json",  // Xero returns XML by default without this
     },
     body: JSON.stringify(body),
   });
