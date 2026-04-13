@@ -152,13 +152,16 @@ export async function resolveOrCreateFolder(parentId: string, name: string): Pro
 
 /**
  * Compute the fiscal year folder name for a given transaction date.
- * Hobbyland fiscal year runs July to June, named "YYYY-YYYY".
- * Examples:
- *   2025-12-05 → "2025-2026" (July 2025 - June 2026)
- *   2026-04-09 → "2025-2026" (still in fiscal year that started July 2025)
- *   2026-07-15 → "2026-2027" (new fiscal year starts July 2026)
+ * Hobbyland fiscal year runs July to June.
+ * Format: "Jul YYYY - Jun YYYY"
  *
- * Andrea's April 2026 checklist item #3 (clarified format on 2026-04-09).
+ * Examples:
+ *   2025-12-05 → "Jul 2025 - Jun 2026"
+ *   2026-04-09 → "Jul 2025 - Jun 2026"
+ *   2026-07-15 → "Jul 2026 - Jun 2027"
+ *
+ * Andrea's feedback (2026-04-13): changed from "2025-2026" to
+ * "Jul 2025 - Jun 2026" format for clarity.
  */
 export function getFiscalYearFolderName(date: string | null | undefined): string {
   if (!date) return "unknown-fy";
@@ -166,31 +169,24 @@ export function getFiscalYearFolderName(date: string | null | undefined): string
   if (isNaN(d.getTime())) return "unknown-fy";
   const year = d.getUTCFullYear();
   const month = d.getUTCMonth() + 1; // 1-12
-  // If month is July or later, fiscal year starts THIS year. Otherwise, last year.
   const fyStart = month >= 7 ? year : year - 1;
-  return `${fyStart}-${fyStart + 1}`;
+  return `Jul ${fyStart} - Jun ${fyStart + 1}`;
 }
 
 /**
- * Determine the "app" folder name for a receipt based on its description and vendor.
- * Andrea wants per-app organization within each fiscal year folder.
+ * Determine the "app" folder name for a receipt based on its vendor.
  *
- * Logic:
- *   1. If the description (jobDetails) contains a domain like "autoquotation.app"
- *      or "devehub.app", use that domain as the app folder.
- *   2. Else use the vendor name (e.g. "Anthropic", "GitHub", "OpenAI").
- *   3. Else "(uncategorized)".
+ * Andrea's feedback (2026-04-13): "we dont need to know what specific
+ * acct, or what specific website, we just need the app + date of the
+ * receipt". So use the VENDOR NAME (e.g. "Cloudflare") as the folder,
+ * NOT the domain (e.g. "autoquotation.app"). All Cloudflare receipts
+ * go under one "Cloudflare" folder regardless of which domain they're for.
  */
 export function resolveAppFolderName(opts: {
   description: string | null | undefined;
   vendor: string | null | undefined;
 }): string {
-  // Extract domain from description if present
-  if (opts.description) {
-    const domainMatch = opts.description.match(/\b([a-z0-9][a-z0-9-]*\.(?:app|com|org|io|net|co|dev|ai|xyz|tech))\b/i);
-    if (domainMatch) return domainMatch[1].toLowerCase();
-  }
-  // Fall back to vendor name (sanitized)
+  // Use vendor name directly (e.g. "Cloudflare, Inc." → "Cloudflare, Inc.")
   if (opts.vendor) {
     return opts.vendor.replace(/[/\\:*?"<>|]/g, "_").trim();
   }
