@@ -388,6 +388,17 @@ export async function createBankTransaction(tx: {
 }
 
 /**
+ * Delete a bank transaction in Xero by setting its status to DELETED.
+ * Works on AUTHORISED (non-reconciled) transactions.
+ */
+export async function deleteBankTransaction(bankTransactionId: string): Promise<unknown> {
+  return xeroPost(`/BankTransactions/${bankTransactionId}`, {
+    BankTransactionID: bankTransactionId,
+    Status: "DELETED",
+  });
+}
+
+/**
  * Delete a DRAFT bill/invoice in Xero by setting its status to DELETED.
  * Only works on DRAFT status items.
  */
