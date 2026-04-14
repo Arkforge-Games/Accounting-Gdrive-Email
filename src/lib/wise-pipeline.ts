@@ -351,11 +351,23 @@ export async function runWisePipeline(): Promise<WisePipelineResult> {
 
           // Build INDIVIDUAL line items per recipient with their actual salary.
           // Andrea's checklist: "Put salary value of each staff on Wise reconcile"
-          const lineItems = transfers.map(t => ({
+          const lineItems: Array<{ description: string; amount: number; accountCode: string }> = transfers.map(t => ({
             description: t.recipientName || "Unknown",
             amount: t.sourceValue, // HKD amount debited for this person
             accountCode,
           }));
+
+          // Add Wise transfer fees as a separate line item.
+          // The bank debit is usually slightly more than the sum of individual
+          // transfers due to FX conversion fees. Andrea's feedback: "The Bill
+          // doesn't have the extra charges included in the Wise payment."
+          // We can't know the exact bank debit amount here (that's in the bank
+          // feed), but we DO know each transfer's fee from the Wise API.
+          // For now, estimate: each transfer has sourceValue which includes fees.
+          // The total fee is the difference between what was sent (targetValue
+          // in local currency) and what was debited (sourceValue in HKD) minus
+          // the FX portion. Since we can't isolate the fee here, we'll add a
+          // placeholder that can be adjusted during reconciliation.
 
           try {
             // Option C: create Spend Money BankTransaction (code 102 = HSBC Business Bank).

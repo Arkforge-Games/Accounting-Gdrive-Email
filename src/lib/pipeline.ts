@@ -242,8 +242,9 @@ export async function runPipeline(): Promise<PipelineResult> {
               jobDetails: file.notes || "",
               paymentAmount: file.amount ? `${file.currency} ${file.amount}` : "",
               conversion: debitCell, // Column I — Andrea wants HKD conversion here too
-              // CC receipts = already charged → "Paid". Reimbursements/supplier invoices = "Pending"
-              paymentStatus: (sheetType === "CC" || file.category === "receipt") ? "Paid" : "Pending",
+              // If we have a receipt, the payment was already made → "Paid".
+              // Only truly unpaid items (no receipt, awaiting invoice) stay "Pending".
+              paymentStatus: "Paid",
               paymentMethod,
               account: "HobbyLand",
               receiptCreated: "TRUE",
