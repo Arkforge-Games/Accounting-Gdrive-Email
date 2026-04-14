@@ -42,6 +42,7 @@ export async function middleware(req: NextRequest) {
     pathname.startsWith("/api/sheets") ||
     pathname.startsWith("/api/wise") ||
     pathname.startsWith("/api/xero") ||
+    pathname.startsWith("/api/admin/") ||
     pathname.startsWith("/api/reports/") ||
     pathname === "/api/crossref" ||
     pathname === "/api/pipeline" ||
