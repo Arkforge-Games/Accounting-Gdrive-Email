@@ -387,6 +387,17 @@ export async function createBankTransaction(tx: {
   });
 }
 
+/**
+ * Delete a DRAFT bill/invoice in Xero by setting its status to DELETED.
+ * Only works on DRAFT status items.
+ */
+export async function deleteDraftBill(invoiceId: string): Promise<unknown> {
+  return xeroPost(`/Invoices/${invoiceId}`, {
+    InvoiceID: invoiceId,
+    Status: "DELETED",
+  });
+}
+
 // ===== Public API =====
 
 export function isXeroConnected(): boolean {

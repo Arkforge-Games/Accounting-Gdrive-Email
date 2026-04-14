@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createBill, applyPaymentToBill, getCachedXeroData } from "@/lib/xero";
+import { createBill, applyPaymentToBill, deleteDraftBill, getCachedXeroData } from "@/lib/xero";
 import { getPayables, PayableRow } from "@/lib/sheets";
 import { getCachedWiseData, getBusinessProfile, getAllTransfers, WiseTransfer } from "@/lib/wise";
 import * as db from "@/lib/db";
@@ -322,11 +322,28 @@ export async function POST(req: NextRequest) {
         });
       }
 
+      case "delete-drafts": {
+        const cachedBills = getCachedXeroData("bills") as Array<{
+          InvoiceID: string; Status: string; Contact: { Name: string }; Total: number;
+        }> | null;
+        if (!cachedBills) return NextResponse.json({ error: "No cached bills" }, { status: 400 });
+        const drafts = cachedBills.filter(b => b.Status === "DRAFT");
+        let deleted = 0, errors = 0;
+        for (const bill of drafts) {
+          try {
+            await deleteDraftBill(bill.InvoiceID);
+            deleted++;
+          } catch { errors++; }
+          await new Promise(r => setTimeout(r, 500));
+        }
+        return NextResponse.json({ success: true, deleted, errors, total: drafts.length });
+      }
+
       default:
         return NextResponse.json(
           {
             error: `Unknown action: ${action}`,
-            available: ["create-bill", "create-from-sheet", "reconcile"],
+            available: ["create-bill", "create-from-sheet", "reconcile", "delete-drafts"],
           },
           { status: 400 }
         );
