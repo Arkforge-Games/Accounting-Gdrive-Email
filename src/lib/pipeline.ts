@@ -12,7 +12,7 @@ import { categorizeFile, extractAmountFromBody } from "./categorize";
 import { isAIConfigured, aiCategorizeFile } from "./ai-categorize";
 import { appendPayableRow, appendReceivableRow, getPayables, getReceivables, convertToHkd, formatHkd, updatePayableCell } from "./sheets";
 import { uploadToDrive, getDriveFolderForSheetType, buildDriveFilename, resolveOrCreateFolder, getFiscalYearFolderName, resolveAppFolderName } from "./drive-upload";
-import { createBill, isXeroConnected } from "./xero";
+import { createBankTransaction, createBill, isXeroConnected } from "./xero";
 import { pickAccountCodeForReceipt } from "./xero-reconcile";
 
 /** Sleep helper to throttle Google Sheets writes (max 60/min) */
@@ -265,19 +265,38 @@ export async function runPipeline(): Promise<PipelineResult> {
                   file.vendor || "",
                   file.notes || "",
                   parseFloat(file.amount),
-                ) || "429"; // Default to General Expenses
-                await createBill({
-                  contactName: file.vendor || "Unknown",
-                  date: file.date?.substring(0, 10) || new Date().toISOString().substring(0, 10),
-                  description: file.notes || `${file.category}: ${file.name}`,
-                  amount: parseFloat(file.amount),
-                  accountCode: xeroCode,
-                  currencyCode: file.currency || "HKD",
-                  invoiceNumber: file.referenceNo || undefined,
-                });
-                db.logPipeline({ runId, fileId: file.id, action: "xero_bill", status: "success", result: xeroCode, details: `${file.vendor} ${file.currency} ${file.amount}` });
+                ) || "429";
+                const amt = parseFloat(file.amount);
+                const dt = file.date?.substring(0, 10) || new Date().toISOString().substring(0, 10);
+                const desc = file.notes || `${file.category}: ${file.name}`;
+                // Option C: Spend Money BankTransaction (code 102 = HSBC Business Bank)
+                // Falls back to DRAFT bill (Option B) if BankTransaction fails
+                try {
+                  await createBankTransaction({
+                    type: "SPEND",
+                    bankAccountCode: "102",
+                    contactName: file.vendor || "Unknown",
+                    date: dt,
+                    description: desc,
+                    amount: amt,
+                    accountCode: xeroCode,
+                    currencyCode: file.currency || "HKD",
+                    reference: file.referenceNo || file.id,
+                  });
+                } catch {
+                  await createBill({
+                    contactName: file.vendor || "Unknown",
+                    date: dt,
+                    description: desc,
+                    amount: amt,
+                    accountCode: xeroCode,
+                    currencyCode: file.currency || "HKD",
+                    invoiceNumber: file.referenceNo || undefined,
+                  });
+                }
+                db.logPipeline({ runId, fileId: file.id, action: "xero_expense", status: "success", result: xeroCode, details: `${file.vendor} ${file.currency} ${file.amount}` });
               } catch (err) {
-                db.logPipeline({ runId, fileId: file.id, action: "xero_bill", status: "error", error: err instanceof Error ? err.message : "Xero failed" });
+                db.logPipeline({ runId, fileId: file.id, action: "xero_expense", status: "error", error: err instanceof Error ? err.message : "Xero failed" });
               }
             }
           } else if (RECEIVABLE_CATEGORIES.has(file.category)) {

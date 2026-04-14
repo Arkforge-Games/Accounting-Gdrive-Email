@@ -11,7 +11,7 @@
 import { NextResponse } from "next/server";
 import * as db from "@/lib/db";
 import { getCachedWiseData, WiseTransfer, WiseRecipient } from "@/lib/wise";
-import { createBill, isXeroConnected } from "@/lib/xero";
+import { createBankTransaction, createBill, isXeroConnected } from "@/lib/xero";
 
 const XERO_ACCOUNT_CODES: Record<string, string> = {
   "Staff": "477",
@@ -73,16 +73,32 @@ export async function POST() {
       const why = `Staff payments ${month} (${transfers.length} transfers via Wise)`;
 
       try {
-        await createBill({
-          contactName: "WISE PAYMENT",
-          date: day,
-          description: why,
-          amount: totalSource,
-          accountCode: "477",
-          currencyCode: currency,
-          invoiceNumber: `Wise batch ${day}`,
-          lineItems, // One line per recipient with individual salary
-        });
+        // Option C first (BankTransaction with code 102), fallback to bill
+        try {
+          await createBankTransaction({
+            type: "SPEND",
+            bankAccountCode: "102",
+            contactName: "WISE PAYMENT",
+            date: day,
+            description: why,
+            amount: totalSource,
+            accountCode: "477",
+            currencyCode: currency,
+            reference: `Wise batch ${day}`,
+            lineItems,
+          });
+        } catch {
+          await createBill({
+            contactName: "WISE PAYMENT",
+            date: day,
+            description: why,
+            amount: totalSource,
+            accountCode: "477",
+            currencyCode: currency,
+            invoiceNumber: `Wise batch ${day}`,
+            lineItems,
+          });
+        }
         results.push({ date: day, count: transfers.length, total: totalSource, currency, who, status: "created" });
       } catch (err) {
         results.push({ date: day, count: transfers.length, total: totalSource, currency, who: who.substring(0, 60), status: "error", error: err instanceof Error ? err.message : "failed" });

@@ -20,7 +20,7 @@
 import * as db from "./db";
 import { getCachedWiseData, WiseTransfer, WiseRecipient } from "./wise";
 import { appendPayableRow, getPayables, convertToHkd, formatHkd, updatePayableCell } from "./sheets";
-import { createBill, isXeroConnected } from "./xero";
+import { createBankTransaction, createBill, isXeroConnected } from "./xero";
 import { getOrCreateReceiptSheet, addReceiptEntry, formatReceiptDate } from "./receipt-generator";
 import { getFiscalYearFolderName } from "./drive-upload";
 
@@ -358,16 +358,35 @@ export async function runWisePipeline(): Promise<WisePipelineResult> {
           }));
 
           try {
-            await createBill({
-              contactName: "WISE PAYMENT",
-              date: day,
-              description: why,
-              amount: totalSource,
-              accountCode,
-              currencyCode: currency,
-              invoiceNumber: `Wise batch ${day}`,
-              lineItems, // One line per recipient with their individual salary
-            });
+            // Option C: create Spend Money BankTransaction (code 102 = HSBC Business Bank).
+            // This appears directly on the reconcile screen for matching.
+            // Falls back to DRAFT bill (Option B) if BankTransaction fails.
+            try {
+              await createBankTransaction({
+                type: "SPEND",
+                bankAccountCode: "102",
+                contactName: "WISE PAYMENT",
+                date: day,
+                description: why,
+                amount: totalSource,
+                accountCode,
+                currencyCode: currency,
+                reference: `Wise batch ${day}`,
+                lineItems,
+              });
+            } catch {
+              // Fallback to DRAFT bill
+              await createBill({
+                contactName: "WISE PAYMENT",
+                date: day,
+                description: why,
+                amount: totalSource,
+                accountCode,
+                currencyCode: currency,
+                invoiceNumber: `Wise batch ${day}`,
+                lineItems,
+              });
+            }
             db.logPipeline({
               runId,
               action: "xero_wise_batch_created",
