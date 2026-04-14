@@ -329,14 +329,18 @@ export async function POST(req: NextRequest) {
         if (!cachedBills) return NextResponse.json({ error: "No cached bills" }, { status: 400 });
         const drafts = cachedBills.filter(b => b.Status === "DRAFT");
         let deleted = 0, errors = 0;
+        const errorMsgs: string[] = [];
         for (const bill of drafts) {
           try {
             await deleteDraftBill(bill.InvoiceID);
             deleted++;
-          } catch { errors++; }
+          } catch (e) {
+            errors++;
+            if (errorMsgs.length < 3) errorMsgs.push(e instanceof Error ? e.message.substring(0, 200) : "unknown");
+          }
           await new Promise(r => setTimeout(r, 500));
         }
-        return NextResponse.json({ success: true, deleted, errors, total: drafts.length });
+        return NextResponse.json({ success: true, deleted, errors, total: drafts.length, sampleErrors: errorMsgs });
       }
 
       default:
