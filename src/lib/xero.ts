@@ -392,8 +392,9 @@ export async function createBankTransaction(tx: {
  * Only works on DRAFT status items.
  */
 export async function deleteDraftBill(invoiceId: string): Promise<unknown> {
-  return xeroPost("/Invoices", {
-    Invoices: [{ InvoiceID: invoiceId, Status: "DELETED" }],
+  // Use the specific invoice endpoint (not the array endpoint)
+  return xeroPost(`/Invoices/${invoiceId}`, {
+    Status: "DELETED",
   });
 }
 
