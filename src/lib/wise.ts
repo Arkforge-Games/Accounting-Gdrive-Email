@@ -163,6 +163,32 @@ export async function getTransfers(profileId: number, limit = 20, offset = 0): P
   return wiseGet(`/v1/transfers?profile=${profileId}&limit=${limit}&offset=${offset}`);
 }
 
+/** Get detailed transfer info including fees. */
+export async function getTransferDetails(transferId: number): Promise<{
+  id: number;
+  sourceValue: number;
+  sourceCurrency: string;
+  targetValue: number;
+  targetCurrency: string;
+  fee: number;
+  feeCurrency: string;
+  rate: number;
+  status: string;
+}> {
+  const data = await wiseGet<Record<string, unknown>>(`/v1/transfers/${transferId}`);
+  return {
+    id: data.id as number,
+    sourceValue: data.sourceValue as number,
+    sourceCurrency: data.sourceCurrency as string,
+    targetValue: data.targetValue as number,
+    targetCurrency: data.targetCurrency as string,
+    fee: (data.fee as number) || 0,
+    feeCurrency: (data.feeCurrency as string) || (data.sourceCurrency as string),
+    rate: data.rate as number,
+    status: data.status as string,
+  };
+}
+
 export async function getAllTransfers(profileId: number): Promise<WiseTransfer[]> {
   const all: WiseTransfer[] = [];
   let offset = 0;

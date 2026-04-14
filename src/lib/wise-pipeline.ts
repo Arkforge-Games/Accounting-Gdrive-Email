@@ -18,7 +18,7 @@
  * Idempotent across runs: wise_processed is the gate.
  */
 import * as db from "./db";
-import { getCachedWiseData, WiseTransfer, WiseRecipient } from "./wise";
+import { getCachedWiseData, WiseTransfer, WiseRecipient, getTransferDetails } from "./wise";
 import { appendPayableRow, getPayables, convertToHkd, formatHkd, updatePayableCell } from "./sheets";
 import { createBankTransaction, createBill, isXeroConnected } from "./xero";
 import { getOrCreateReceiptSheet, addReceiptEntry, formatReceiptDate } from "./receipt-generator";
@@ -304,6 +304,8 @@ export async function runWisePipeline(): Promise<WisePipelineResult> {
           sourceCurrency: string;
           date: string;
           sheetType: string;
+          fee: number;
+          transferId: number;
         }> = [];
 
         for (const t of outgoing) {
@@ -313,12 +315,25 @@ export async function runWisePipeline(): Promise<WisePipelineResult> {
           if (!db.isWiseTransferProcessed(tid)) continue;
           const recipientName = recipientLookup.get(t.targetAccount) || t.details?.reference || t.reference || "";
           const { sheetType } = classifyWiseTransfer(recipientName, t.details?.reference || t.reference || "");
+
+          // Fetch fee from Wise API for accurate Xero totals
+          let fee = 0;
+          try {
+            const details = await getTransferDetails(t.id);
+            fee = details.fee || 0;
+            await sleep(500); // Rate limit
+          } catch {
+            // If we can't get fees, continue without them
+          }
+
           appendedTransfers.push({
             recipientName,
             sourceValue: t.sourceValue,
             sourceCurrency: t.sourceCurrency,
             date: t.created,
             sheetType,
+            fee,
+            transferId: t.id,
           });
         }
 
@@ -333,7 +348,7 @@ export async function runWisePipeline(): Promise<WisePipelineResult> {
 
         for (const [day, transfers] of byDate) {
           if (transfers.length === 0) continue;
-          const totalSource = transfers.reduce((s, t) => s + t.sourceValue, 0);
+          const totalSource = transfers.reduce((s, t) => s + t.sourceValue + (t.fee || 0), 0);
           const currency = transfers[0].sourceCurrency || "HKD";
 
           // WHAT = dominant type's account code
@@ -358,16 +373,16 @@ export async function runWisePipeline(): Promise<WisePipelineResult> {
           }));
 
           // Add Wise transfer fees as a separate line item.
-          // The bank debit is usually slightly more than the sum of individual
-          // transfers due to FX conversion fees. Andrea's feedback: "The Bill
-          // doesn't have the extra charges included in the Wise payment."
-          // We can't know the exact bank debit amount here (that's in the bank
-          // feed), but we DO know each transfer's fee from the Wise API.
-          // For now, estimate: each transfer has sourceValue which includes fees.
-          // The total fee is the difference between what was sent (targetValue
-          // in local currency) and what was debited (sourceValue in HKD) minus
-          // the FX portion. Since we can't isolate the fee here, we'll add a
-          // placeholder that can be adjusted during reconciliation.
+          // Andrea's feedback: "The Bill doesn't have the extra charges included
+          // in the Wise payment." The bank debit = sum(sourceValue) + sum(fees).
+          const totalFees = transfers.reduce((s, t) => s + (t.fee || 0), 0);
+          if (totalFees > 0) {
+            lineItems.push({
+              description: "Wise Transfer Fees",
+              amount: Math.round(totalFees * 100) / 100,
+              accountCode: "404", // Bank Fees
+            });
+          }
 
           try {
             // Option C: create Spend Money BankTransaction (code 102 = HSBC Business Bank).
