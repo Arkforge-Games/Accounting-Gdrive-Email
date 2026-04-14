@@ -398,16 +398,20 @@ function parseAIResponse(content: string): AICategorizeResult {
       }
     }
 
+    // Normalize all whitespace in extracted fields — PDFs often contain non-breaking
+    // spaces (U+00A0) which look identical but make text unsearchable in Google Sheets.
+    const normalizeWs = (s: string | null) => s ? s.replace(/[\u00A0\u2000-\u200B\u202F\u205F\u3000]/g, " ").trim() : null;
+
     return {
       category: validCategories.includes(parsed.category) ? parsed.category : "uncategorized",
       sheetType,
       paymentMethod: parsed.paymentMethod || null,
-      vendor: parsed.vendor || null,
+      vendor: normalizeWs(parsed.vendor),
       amount: parsed.amount || null,
       currency: parsed.currency || null,
-      description: parsed.description || null,
+      description: normalizeWs(parsed.description),
       transactionDate,
-      invoiceNumber: parsed.invoiceNumber || null,
+      invoiceNumber: normalizeWs(parsed.invoiceNumber),
       confidence: ["high", "medium", "low"].includes(parsed.confidence) ? parsed.confidence : "medium",
     };
   } catch {

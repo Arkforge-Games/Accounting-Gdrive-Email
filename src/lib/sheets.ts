@@ -164,11 +164,15 @@ async function findNextEmptyRow(sheetName: string, anchorCol: string = "A", star
   return startRow + lastNonEmpty + 1;
 }
 
+// Normalize non-breaking spaces and other Unicode whitespace to regular ASCII space.
+// PDFs often contain U+00A0 which looks identical but makes text unsearchable.
+function normalizeSpaces(s: string): string {
+  return s.replace(/[\u00A0\u2000-\u200B\u202F\u205F\u3000]/g, " ");
+}
+
 export async function appendPayableRow(data: Partial<PayableRow>): Promise<number> {
   const sheets = getSheets();
   const nextRow = await findNextEmptyRow("Payable", "A", 9);
-  // Column R (Running Balance) uses a SUM formula instead of a static value.
-  // This way the balance auto-recalculates when rows are edited/deleted.
   const runningBalanceCell = data.debit
     ? buildRunningBalanceFormula(nextRow)
     : (data.runningBalance || "");
@@ -181,10 +185,10 @@ export async function appendPayableRow(data: Partial<PayableRow>): Promise<numbe
         data.jobDate || "",
         data.type || "",
         data.receiptLink || "",
-        data.supplierName || "",
-        data.invoiceNumber || "",
-        data.fullName || "",
-        data.jobDetails || "",
+        normalizeSpaces(data.supplierName || ""),
+        normalizeSpaces(data.invoiceNumber || ""),
+        normalizeSpaces(data.fullName || ""),
+        normalizeSpaces(data.jobDetails || ""),
         data.paymentAmount || "",
         data.conversion || "",
         data.paymentDetails || "",
