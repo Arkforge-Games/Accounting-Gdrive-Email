@@ -336,7 +336,7 @@ export async function POST(req: NextRequest) {
             deleted++;
           } catch (e) {
             errors++;
-            if (errorMsgs.length < 3) errorMsgs.push(e instanceof Error ? e.message.substring(0, 200) : "unknown");
+            if (errorMsgs.length < 3) errorMsgs.push(e instanceof Error ? e.message.substring(0, 500) : "unknown");
           }
           await new Promise(r => setTimeout(r, 500));
         }
