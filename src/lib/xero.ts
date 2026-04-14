@@ -392,10 +392,49 @@ export async function createBankTransaction(tx: {
  * Only works on DRAFT status items.
  */
 export async function deleteDraftBill(invoiceId: string): Promise<unknown> {
-  // Use the specific invoice endpoint (not the array endpoint)
+  // Xero requires InvoiceID in the body for status updates
   return xeroPost(`/Invoices/${invoiceId}`, {
+    InvoiceID: invoiceId,
     Status: "DELETED",
   });
+}
+
+/**
+ * Get all DRAFT bills (ACCPAY) from Xero. Paginates automatically.
+ */
+export async function getAllDraftBills(): Promise<XeroInvoice[]> {
+  return getAllInvoices('Type=="ACCPAY"&&Status=="DRAFT"');
+}
+
+/**
+ * Bulk-delete all DRAFT bills. Returns results per bill.
+ */
+export async function bulkDeleteDraftBills(invoiceIds?: string[]): Promise<{
+  deleted: string[];
+  failed: Array<{ id: string; error: string }>;
+}> {
+  // If no IDs provided, fetch all draft bills
+  let ids = invoiceIds;
+  if (!ids || ids.length === 0) {
+    const drafts = await getAllDraftBills();
+    ids = drafts.map(d => d.InvoiceID);
+  }
+
+  const deleted: string[] = [];
+  const failed: Array<{ id: string; error: string }> = [];
+
+  for (const id of ids) {
+    try {
+      await deleteDraftBill(id);
+      deleted.push(id);
+    } catch (err) {
+      failed.push({ id, error: (err as Error).message });
+    }
+    // Small delay to avoid rate limiting
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  return { deleted, failed };
 }
 
 // ===== Public API =====
