@@ -163,32 +163,36 @@ export async function getTransfers(profileId: number, limit = 20, offset = 0): P
   return wiseGet(`/v1/transfers?profile=${profileId}&limit=${limit}&offset=${offset}`);
 }
 
-/** Get detailed transfer info including fees. */
-export async function getTransferDetails(transferId: number): Promise<{
-  id: number;
-  sourceValue: number;
-  sourceCurrency: string;
-  targetValue: number;
-  targetCurrency: string;
-  fee: number;
-  feeCurrency: string;
-  rate: number;
-  status: string;
-  raw: Record<string, unknown>;
-}> {
-  const data = await wiseGet<Record<string, unknown>>(`/v1/transfers/${transferId}`);
-  return {
-    id: data.id as number,
-    sourceValue: data.sourceValue as number,
-    sourceCurrency: data.sourceCurrency as string,
-    targetValue: data.targetValue as number,
-    targetCurrency: data.targetCurrency as string,
-    fee: (data.fee as number) || 0,
-    feeCurrency: (data.feeCurrency as string) || (data.sourceCurrency as string),
-    rate: data.rate as number,
-    status: data.status as string,
-    raw: data,
-  };
+/**
+ * Get the fee for a transfer by looking up its quote.
+ * Wise stores fees on the quote object, not the transfer itself.
+ * The quote UUID is available on each transfer.
+ */
+export async function getTransferFee(transfer: WiseTransfer): Promise<number> {
+  if (!transfer.quoteUuid) return 0;
+  try {
+    // v3 quotes endpoint returns paymentOptions with fee breakdown
+    const quote = await wiseGet<Record<string, unknown>>(`/v3/profiles/${transfer.business || transfer.user}/quotes/${transfer.quoteUuid}`);
+    // v3 quote has paymentOptions[].fee.total
+    const options = (quote.paymentOptions || quote.payment_options) as Array<{ fee?: { total: number } }> | undefined;
+    if (options && options.length > 0) {
+      const fee = options[0]?.fee?.total;
+      if (fee && isFinite(fee)) return fee;
+    }
+    // v2 fallback: quote.fee
+    const fee = quote.fee as number;
+    if (fee && isFinite(fee)) return fee;
+    return 0;
+  } catch {
+    // If quote lookup fails, estimate fee from sourceValue vs targetValue
+    // fee ≈ sourceValue - (targetValue / rate)
+    if (transfer.rate && transfer.targetValue && transfer.sourceValue) {
+      const expectedSource = transfer.targetValue / transfer.rate;
+      const estimatedFee = transfer.sourceValue - expectedSource;
+      if (isFinite(estimatedFee) && estimatedFee > 0) return Math.round(estimatedFee * 100) / 100;
+    }
+    return 0;
+  }
 }
 
 export async function getAllTransfers(profileId: number): Promise<WiseTransfer[]> {

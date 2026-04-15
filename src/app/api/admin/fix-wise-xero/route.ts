@@ -17,7 +17,7 @@ import {
   isXeroConnected,
   type XeroBankTransaction,
 } from "@/lib/xero";
-import { getCachedWiseData, WiseTransfer, WiseRecipient, getTransferDetails } from "@/lib/wise";
+import { getCachedWiseData, WiseTransfer, WiseRecipient, getTransferFee } from "@/lib/wise";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -180,8 +180,8 @@ export async function POST(req: Request) {
         });
 
         try {
-          const details = await getTransferDetails(t.id);
-          totalFees += details.fee || 0;
+          const fee = await getTransferFee(t);
+          totalFees += fee;
           await sleep(500);
         } catch {
           // Can't get fee, continue

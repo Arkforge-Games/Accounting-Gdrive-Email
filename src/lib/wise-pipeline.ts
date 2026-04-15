@@ -18,7 +18,7 @@
  * Idempotent across runs: wise_processed is the gate.
  */
 import * as db from "./db";
-import { getCachedWiseData, WiseTransfer, WiseRecipient, getTransferDetails } from "./wise";
+import { getCachedWiseData, WiseTransfer, WiseRecipient, getTransferFee } from "./wise";
 import { appendPayableRow, getPayables, convertToHkd, formatHkd, updatePayableCell } from "./sheets";
 import { createBankTransaction, createBill, isXeroConnected } from "./xero";
 import { getOrCreateReceiptSheet, addReceiptEntry, formatReceiptDate } from "./receipt-generator";
@@ -319,8 +319,7 @@ export async function runWisePipeline(): Promise<WisePipelineResult> {
           // Fetch fee from Wise API for accurate Xero totals
           let fee = 0;
           try {
-            const details = await getTransferDetails(t.id);
-            fee = details.fee || 0;
+            fee = await getTransferFee(t);
             await sleep(500); // Rate limit
           } catch {
             // If we can't get fees, continue without them
