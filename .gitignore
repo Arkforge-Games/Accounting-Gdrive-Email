@@ -43,3 +43,5 @@ next-env.d.ts
 # database (tracked intentionally for this project)
 .env.local
 documents/info.txt
+.env.local
+data/

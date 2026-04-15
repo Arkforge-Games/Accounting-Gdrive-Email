@@ -174,6 +174,7 @@ export async function getTransferDetails(transferId: number): Promise<{
   feeCurrency: string;
   rate: number;
   status: string;
+  raw: Record<string, unknown>;
 }> {
   const data = await wiseGet<Record<string, unknown>>(`/v1/transfers/${transferId}`);
   return {
@@ -186,6 +187,7 @@ export async function getTransferDetails(transferId: number): Promise<{
     feeCurrency: (data.feeCurrency as string) || (data.sourceCurrency as string),
     rate: data.rate as number,
     status: data.status as string,
+    raw: data,
   };
 }
 
