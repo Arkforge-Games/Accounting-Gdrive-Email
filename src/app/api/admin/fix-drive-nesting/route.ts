@@ -207,10 +207,14 @@ export async function POST(req: NextRequest) {
           const remaining = await listFolderContents(drive, sub.id);
           if (remaining.length === 0) {
             try {
-              await drive.files.delete({ fileId: sub.id, supportsAllDrives: true });
+              await drive.files.update({
+                fileId: sub.id,
+                requestBody: { trashed: true },
+                supportsAllDrives: true,
+              });
               results.push({ action: "deleted-folder", from: `${folder.name}/${sub.name}`, to: "" });
-            } catch {
-              // Can't delete, might have permissions issues
+            } catch (delErr) {
+              results.push({ action: "delete-failed", from: `${folder.name}/${sub.name}`, to: "", error: (delErr as Error).message });
             }
           }
         } else {
@@ -238,10 +242,70 @@ export async function POST(req: NextRequest) {
       const remainingTop = await listFolderContents(drive, folder.id);
       if (remainingTop.length === 0) {
         try {
-          await drive.files.delete({ fileId: folder.id, supportsAllDrives: true });
+          await drive.files.update({
+            fileId: folder.id,
+            requestBody: { trashed: true },
+            supportsAllDrives: true,
+          });
           results.push({ action: "deleted-fy-folder", from: folder.name, to: "" });
-        } catch {
-          // permissions
+        } catch (delErr) {
+          results.push({ action: "delete-fy-failed", from: folder.name, to: "", error: (delErr as Error).message });
+        }
+      }
+    }
+
+    // Also clean up empty/duplicate folders in the correct FY folder
+    const correctFyFolders = topLevel.filter(f =>
+      f.mimeType === "application/vnd.google-apps.folder" && f.name.startsWith("Jul ")
+    );
+    for (const fyFolder of correctFyFolders) {
+      const appFolders = await listFolderContents(drive, fyFolder.id);
+      for (const app of appFolders.filter(a => a.mimeType === "application/vnd.google-apps.folder")) {
+        const appContents = await listFolderContents(drive, app.id);
+        // Delete empty app folders
+        if (appContents.length === 0) {
+          try {
+            await drive.files.update({
+              fileId: app.id,
+              requestBody: { trashed: true },
+              supportsAllDrives: true,
+            });
+            results.push({ action: "deleted-empty-app", from: `${fyFolder.name}/${app.name}`, to: "" });
+          } catch (err) {
+            results.push({ action: "delete-app-failed", from: `${fyFolder.name}/${app.name}`, to: "", error: (err as Error).message });
+          }
+          continue;
+        }
+        // Merge "Cloudflare, Inc." into "Cloudflare" etc
+        const cleanName = resolveAppFolderName({ description: null, vendor: app.name });
+        if (cleanName !== app.name) {
+          const correctAppId = await resolveOrCreateFolder(fyFolder.id, cleanName);
+          if (correctAppId !== app.id) {
+            let moved = 0;
+            for (const file of appContents) {
+              try {
+                await drive.files.update({
+                  fileId: file.id,
+                  addParents: correctAppId,
+                  removeParents: app.id,
+                  fields: "id",
+                  supportsAllDrives: true,
+                });
+                moved++;
+              } catch { /* skip */ }
+            }
+            if (moved > 0) {
+              results.push({ action: "merged", from: `${fyFolder.name}/${app.name}`, to: `${fyFolder.name}/${cleanName}`, count: moved });
+            }
+            // Trash old folder
+            const rem = await listFolderContents(drive, app.id);
+            if (rem.length === 0) {
+              try {
+                await drive.files.update({ fileId: app.id, requestBody: { trashed: true }, supportsAllDrives: true });
+                results.push({ action: "deleted-merged", from: `${fyFolder.name}/${app.name}`, to: "" });
+              } catch { /* skip */ }
+            }
+          }
         }
       }
     }
