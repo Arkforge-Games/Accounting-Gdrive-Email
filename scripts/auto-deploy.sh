@@ -39,10 +39,29 @@ fi
 
 log "New commit detected: $LOCAL -> $REMOTE"
 
-# Pull
+# Backup .env.local before pull (never let git delete it)
+if [ -f "$REPO_DIR/.env.local" ]; then
+  cp "$REPO_DIR/.env.local" "/tmp/.env.local.backup"
+fi
+
+# Pull — reset tracked files to avoid merge conflicts with local changes
+git checkout -- . >> "$LOG" 2>&1 || true
 if ! git pull --ff-only origin master >> "$LOG" 2>&1; then
   log "ERROR: git pull failed"
+  # Restore .env.local even if pull fails
+  [ -f /tmp/.env.local.backup ] && cp /tmp/.env.local.backup "$REPO_DIR/.env.local"
   exit 1
+fi
+
+# Restore .env.local if git deleted it
+if [ ! -f "$REPO_DIR/.env.local" ]; then
+  if [ -f /tmp/.env.local.backup ]; then
+    cp /tmp/.env.local.backup "$REPO_DIR/.env.local"
+    log "Restored .env.local from /tmp backup"
+  elif [ -f /root/.env.local.accounting-backup ]; then
+    cp /root/.env.local.accounting-backup "$REPO_DIR/.env.local"
+    log "Restored .env.local from /root backup"
+  fi
 fi
 
 # Install only if package files changed in this pull
